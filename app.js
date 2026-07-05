@@ -48,6 +48,10 @@ const CONFIG = {
 // Kategorisi boş/eksik kaynakların otomatik grubu (tek yerden değişir).
 const UNCATEGORIZED = 'Kategorisiz';
 
+// Kaynak simgesi (data URL) üst sınırı. Bulut senkron KV anahtar başına 1 MB
+// ve tüm kaynakların ikonu aynı snapshot'a gidiyor → tek ikon büyük olmamalı.
+const MAX_ICON_BYTES = 40 * 1024;   // ~40 KB (data URL karakter uzunluğu)
+
 /* --------------------------------------------------------------------------
    GÜVENLİ DEPOLAMA — localStorage engelliyse belleğe düşer, uygulama çökmez
    -------------------------------------------------------------------------- */
@@ -93,7 +97,7 @@ const state = {
   cloudKey: Store.get('mecra.cloudKey', ''),  // bulut senkron anahtarı (varsa)
   items: [],                                  // birleşik akış
   filter: 'all',                              // 'all' | {type:'category',name} | kaynak id
-  search: '',                                 // canlı arama metni (yalnız bellek)
+  expandedCategory: null,                     // sidebar akordeonunda açık tek kategori (ad) ya da null
   lastRefreshed: Store.get('mecra.lastRefreshed', 0),  // son başarılı yenilenme (ms)
   loading: false,
 };
@@ -131,16 +135,6 @@ function htmlToText(html) {
   } catch (_) {
     return String(html).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
   }
-}
-
-// Arama için normalize: büyük/küçük + Türkçe karakter duyarsız.
-// "İstanbul"→"istanbul", "ışık"→"isik", "ğ/ş/ç/ö/ü"→"g/s/c/o/u".
-function foldTr(s) {
-  return (s || '')
-    .toLowerCase()                                   // I→i, İ→i̇(nokta), Ş→ş...
-    .replace(/ı/g, 'i')                              // noktasız ı → i
-    .normalize('NFD')                                // ş→s+̧, ö→o+̈ ...
-    .replace(/[̀-ͯ]/g, '');                // birleşik diakritikleri sil
 }
 
 // Göreli tarih ("3 sa önce") — Türkçe.
@@ -248,7 +242,18 @@ function normalizeSource(s) {
     type: s.type === 'youtube' ? 'youtube' : 'rss',
     site: s.site || hostname(s.url),
     category: s.category ? String(s.category) : '',
+    // Opsiyonel simge (data URL / http(s)); yoksa boş → harf rozeti kullanılır.
+    icon: sanitizeIcon(s.icon),
   };
+}
+
+// Simge alanını güvene al: yalnız http(s) veya data:image kabul, boyut sınırı uygula.
+function sanitizeIcon(icon) {
+  const v = typeof icon === 'string' ? icon.trim() : '';
+  if (!v) return '';
+  if (!/^https?:\/\//i.test(v) && !/^data:image\//i.test(v)) return '';
+  if (/^data:/i.test(v) && v.length > MAX_ICON_BYTES) return '';   // şişkin data URL'yi düşür
+  return v;
 }
 
 // --- Debounce'lu yazma + sessiz retry + durum göstergesi ---
@@ -280,6 +285,7 @@ async function initialSync() {
     const cloud = await kvGet(state.cloudKey);
     mergeCloud(cloud);          // yerelle birleştir + persist (push planlar)
     renderSources();
+    renderSettings();
     renderFeed();
     schedulePush(true);         // birleşmiş sonucu hemen buluta yaz
     setCloudStatus('saved');
@@ -592,6 +598,7 @@ async function addSource(raw) {
     site: hostname(resolved.url),
     // Seçili kategori; "Kategorisiz" ise boş sakla (kategori türetildiği için).
     category: pendingCategory === UNCATEGORIZED ? '' : pendingCategory,
+    icon: '',                    // simge sonradan Ayarlar'dan eklenir
   };
   state.sources.push(source);
   // Daha önce silinmiş bir url yeniden ekleniyorsa tombstone'dan çıkar
@@ -606,6 +613,7 @@ async function addSource(raw) {
   updateChooserLabel();
 
   renderSources();
+  renderSettings();              // Ayarlar açıksa yeni kaynak listede belirsin
   await refresh();               // yeni kaynağı akışa kat (tek merkezi çekme noktası)
 }
 
@@ -617,6 +625,7 @@ function removeSource(id) {
   if (state.filter === id) state.filter = 'all';
   persist();
   renderSources();
+  renderSettings();   // Ayarlar listesi de güncellensin
   rebuildFeed();
 }
 
@@ -736,7 +745,7 @@ function markRead(id) {
   if (!state.read.has(id)) {
     state.read.add(id);
     persist();
-    renderSources();   // okunmamış sayaçları güncelle
+    refreshSidebarState();   // yalnız sayaçları güncelle (listeyi yıkma → iOS repaint güvenli)
   }
 }
 function markAllRead() {
@@ -754,35 +763,41 @@ function unreadCount(sourceId) {
    RENDER
    -------------------------------------------------------------------------- */
 function visibleItems() {
-  // 1) Önce mevcut filtre (Hepsi / kategori / kaynak)
-  let items;
+  // Seçili filtre: Hepsi / kategori / tek kaynak
   if (state.filter === 'all') {
-    items = state.items;
-  } else if (state.filter && state.filter.type === 'category') {
+    return state.items;
+  }
+  if (state.filter && state.filter.type === 'category') {
     // Kategorinin tüm kaynakları birleşik (sıra korunur)
     const key = state.filter.name.toLowerCase();
     const ids = new Set(
       state.sources.filter((s) => effCat(s).toLowerCase() === key).map((s) => s.id)
     );
-    items = state.items.filter((it) => ids.has(it.sourceId));
-  } else {
-    // Tek kaynak
-    items = state.items.filter((it) => it.sourceId === state.filter);
+    return state.items.filter((it) => ids.has(it.sourceId));
   }
-
-  // 2) Sonra arama daraltır (başlık + özet, Türkçe-duyarsız). Boşsa dokunma.
-  const q = foldTr(state.search).trim();
-  if (q) {
-    items = items.filter(
-      (it) => foldTr(it.title).includes(q) || (it.summary && foldTr(it.summary).includes(q))
-    );
-  }
-  return items;
+  // Tek kaynak
+  return state.items.filter((it) => it.sourceId === state.filter);
 }
 
+// Sidebar akordeonunda "name" kategorisi açık mı? (büyük/küçük duyarsız)
+function isExpanded(name) {
+  return !!(state.expandedCategory &&
+    state.expandedCategory.toLowerCase() === (name || '').toLowerCase());
+}
+
+// Açık kategori artık yoksa (tüm kaynakları silindi/taşındı) durumu sıfırla.
+function clampExpanded() {
+  if (!state.expandedCategory) return;
+  const key = state.expandedCategory.toLowerCase();
+  if (!state.sources.some((s) => effCat(s).toLowerCase() === key)) state.expandedCategory = null;
+}
+
+// SIDEBAR (filtre) — sade: "Hepsi" + kategori akordeonları. Aksiyon ikonu YOK.
 function renderSources() {
   ensureValidFilter();               // yok olan kategori/kaynak seçiliyse "Hepsi"ye düş
+  clampExpanded();
   const nav = $('#sourceList');
+  if (!nav) return;
   nav.textContent = '';              // güvenli temizlik
 
   // "Hepsi" satırı (grupsuz, en üstte)
@@ -794,21 +809,29 @@ function renderSources() {
     active: state.filter === 'all',
   }));
 
-  // Kategoriye göre gruplar
+  // Kategoriye göre gruplar (her biri akordeon)
   categoryGroups().forEach((group) => {
     nav.appendChild(categoryHeader(group));
+
+    // Akordeon gövdesi: grid 0fr↔1fr ile yumuşak aç/kapat
+    const body = document.createElement('div');
+    body.className = 'cat-body' + (isExpanded(group.name) ? ' open' : '');
+    body.dataset.cat = group.key;
+    const inner = document.createElement('div');
+    inner.className = 'cat-body-inner';
     group.sources.forEach((s) => {
-      nav.appendChild(sourceRow({
+      inner.appendChild(sourceRow({
         id: s.id,
         title: s.title,
         kind: s.type === 'youtube' ? 'yt' : 'rss',
         count: unreadCount(s.id),
         active: state.filter === s.id,
-        deletable: true,
-        source: s,           // kategori değiştir butonu için
+        source: s,           // simge rozeti için (aksiyon ikonu için değil)
         nested: true,        // grup altında girintili
       }));
     });
+    body.appendChild(inner);
+    nav.appendChild(body);
   });
 
   // Toolbar başlığı + akıştaki büyük başlık seçili filtreye göre
@@ -817,15 +840,71 @@ function renderSources() {
   $('#largeTitle').textContent = title;
 }
 
-// Kategori grup başlığı — tıklayınca o kategoriyi filtreler.
+// Kenar çubuğunu YIKMADAN güncelle: yalnız aktif satır (.active), akordeon
+// açık/kapalı durumu (ok rotasyonu dahil) ve okunmamış sayaç rozetleri değişir.
+// Yapı (kaynak/kategori ekle-sil) değişmediği sürece bunu kullan — böylece hem
+// dokunmatikte focus/hit-test bozulmaz hem de iOS cam panel repaint sorunu olmaz.
+// (Yapı değişince tam kurulum için renderSources() çağır.)
+function refreshSidebarState() {
+  ensureValidFilter();
+  clampExpanded();
+  const nav = $('#sourceList');
+  if (!nav) return;
+
+  // "Hepsi" + tek kaynak satırları: aktiflik + okunmamış sayacı
+  nav.querySelectorAll('.source-item').forEach((row) => {
+    const id = row.dataset.id;
+    row.classList.toggle('active', state.filter === id);   // 'all' de string eşleşir
+
+    const badge = row.querySelector('.source-count');
+    if (badge) {
+      const c = unreadCount(id);          // 'all' → tümü; diğerleri kaynak id
+      badge.textContent = c > 99 ? '99+' : String(c);
+      badge.classList.toggle('has', c > 0);
+    }
+  });
+
+  // Kategori başlıkları: aktiflik + akordeon durumu (ok) + kategori sayacı
+  nav.querySelectorAll('.cat-header').forEach((row) => {
+    const key = row.dataset.cat;
+    const active =
+      state.filter && state.filter.type === 'category' &&
+      state.filter.name.toLowerCase() === key;
+    row.classList.toggle('active', active);
+    row.classList.toggle('expanded', isExpanded(row.dataset.name));
+
+    const badge = row.querySelector('.source-count');
+    if (badge) {
+      const c = unreadForCategory(row.dataset.name);
+      badge.textContent = c > 99 ? '99+' : String(c);
+      badge.classList.toggle('has', c > 0);
+    }
+  });
+
+  // Akordeon gövdeleri: yalnız açık kategorininki genişler
+  nav.querySelectorAll('.cat-body').forEach((body) => {
+    body.classList.toggle('open',
+      !!(state.expandedCategory && state.expandedCategory.toLowerCase() === body.dataset.cat));
+  });
+
+  // Başlıklar seçili filtreye göre
+  const title = currentFilterTitle();
+  $('#toolbarTitle').textContent = title;
+  $('#largeTitle').textContent = title;
+}
+
+// Kategori grup başlığı — tek tıkla hem akordeonu aç/kapat hem akışı filtrele.
 function categoryHeader(group) {
   const active =
     state.filter && state.filter.type === 'category' &&
     state.filter.name.toLowerCase() === group.key;
+  const expanded = isExpanded(group.name);
 
   const row = document.createElement('button');
-  row.className = 'cat-header' + (active ? ' active' : '');
+  row.className = 'cat-header' + (active ? ' active' : '') + (expanded ? ' expanded' : '');
   row.type = 'button';
+  row.dataset.cat = group.key;    // kısmi güncelleme için (lowercase anahtar)
+  row.dataset.name = group.name;  // sayaç hesabı unreadForCategory(name) ister
 
   const name = document.createElement('span');
   name.className = 'cat-header-name';
@@ -838,26 +917,67 @@ function categoryHeader(group) {
   badge.textContent = c > 99 ? '99+' : String(c);
   row.appendChild(badge);
 
+  // Sağda akordeon oku (kapalı → ›, açık → 90° dönüp aşağı)
+  const chev = document.createElement('span');
+  chev.className = 'cat-chevron';
+  chev.setAttribute('aria-hidden', 'true');
+  chev.textContent = '›';
+  row.appendChild(chev);
+
   row.addEventListener('click', () => {
-    state.filter = { type: 'category', name: group.name };
-    renderSources();
+    if (isExpanded(group.name)) {
+      // Aynı kategoriye tekrar dokunuş → akordeonu kapat + akışı "Hepsi"ye döndür.
+      // Gerekçe: açık kategori == filtrelenen kategori; hiçbiri açık değilse Hepsi.
+      // Böylece "açık akordeon" ile "filtre" daima kilitli (tutarlı, sürprizsiz).
+      state.expandedCategory = null;
+      state.filter = 'all';
+    } else {
+      // Tek değişken tutulduğu için önceki kategori otomatik kapanır.
+      state.expandedCategory = group.name;
+      state.filter = { type: 'category', name: group.name };
+    }
+    refreshSidebarState();   // DOM'u yıkmadan aç/kapat + aktif + sayaç
     renderFeed();
-    closeSidebar();
+    // Çekmece açık kalsın: kullanıcı açılan akordeondan alt kaynağı seçebilsin.
   });
 
   return row;
 }
 
-// Tek kaynak satırı (DOM, innerHTML kullanmadan — güvenli).
-function sourceRow({ id, title, kind, count, active, deletable, source, nested }) {
+// Kaynak rozeti: simge (icon) varsa yuvarlak <img>, yoksa harf/▶ noktası.
+// Hem sidebar hem Ayarlar satırlarında kullanılır (geriye dönük uyumlu).
+function sourceBadgeEl(source, kind, title) {
+  if (source && source.icon) {
+    const img = document.createElement('img');
+    img.className = 'source-icon';
+    img.loading = 'lazy';
+    img.decoding = 'async';
+    img.src = source.icon;
+    img.alt = '';
+    // Simge yüklenmezse harf rozetine düş (kırık görsel kalmasın).
+    img.addEventListener('error', () => {
+      if (img.parentNode) img.parentNode.replaceChild(makeDot(kind, title), img);
+    });
+    return img;
+  }
+  return makeDot(kind, title);
+}
+function makeDot(kind, title) {
+  const dot = document.createElement('span');
+  dot.className = 'source-dot ' + (kind === 'yt' ? 'yt' : kind === 'all' ? 'all' : '');
+  dot.textContent = kind === 'yt' ? '▶' : kind === 'all' ? '' : ((title && title[0]) || '?').toUpperCase();
+  return dot;
+}
+
+// SIDEBAR kaynak satırı — sadece rozet + isim + sayaç; tıklayınca yalnız filtreler.
+// (Kategori değiştir / sil / simge aksiyonları Ayarlar'daki yönetim satırındadır.)
+function sourceRow({ id, title, kind, count, active, source, nested }) {
   const row = document.createElement('button');
   row.className = 'source-item' + (active ? ' active' : '') + (nested ? ' nested' : '');
   row.type = 'button';
+  row.dataset.id = String(id);   // kısmi güncelleme (refreshSidebarState) için kimlik
 
-  const dot = document.createElement('span');
-  dot.className = 'source-dot ' + (kind === 'yt' ? 'yt' : kind === 'all' ? 'all' : '');
-  dot.textContent = kind === 'yt' ? '▶' : kind === 'all' ? '' : (title[0] || '?').toUpperCase();
-  row.appendChild(dot);
+  row.appendChild(sourceBadgeEl(source, kind, title));
 
   const name = document.createElement('span');
   name.className = 'source-name';
@@ -872,49 +992,262 @@ function sourceRow({ id, title, kind, count, active, deletable, source, nested }
   // Filtreye tıkla
   row.addEventListener('click', () => {
     state.filter = id;
-    renderSources();
+    refreshSidebarState();   // yapı değişmez → listeyi yıkma (focus/iOS repaint güvenli)
     renderFeed();
     closeSidebar();     // mobilde seçince kapan
   });
 
-  // Kategori değiştir (⋯) — alt sayfayı açar
-  if (source) {
-    const catBtn = document.createElement('span');
-    catBtn.className = 'source-cat';
-    catBtn.setAttribute('role', 'button');
-    catBtn.setAttribute('aria-label', 'Kategori değiştir');
-    catBtn.title = 'Kategori değiştir';
-    catBtn.textContent = '⋯';
-    catBtn.addEventListener('click', async (ev) => {
-      ev.stopPropagation();
-      const picked = await openCategorySheet(effCat(source));
-      if (picked !== null) {
-        // "Kategorisiz" → boş sakla; diğerleri yazıldığı gibi.
-        source.category = picked === UNCATEGORIZED ? '' : picked;
-        persist();
-        ensureValidFilter();
-        rebuildFeed();          // gruplama + akış anında güncellenir
-      }
-    });
-    row.appendChild(catBtn);
+  return row;
+}
+
+/* --------------------------------------------------------------------------
+   AYARLAR — tam ekran yönetim sayfası (ekleme + kaynak yönetimi + yedek + senkron)
+   -------------------------------------------------------------------------- */
+
+// Ayarlar'daki kaynak yönetim listesi: kategoriye göre gruplu düz liste (akordeon YOK).
+function renderSettings() {
+  const list = $('#settingsList');
+  if (!list) return;
+  list.textContent = '';
+
+  if (state.sources.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'settings-empty';
+    empty.textContent = 'Henüz kaynak yok. Yukarıdaki kutudan ekleyebilirsin.';
+    list.appendChild(empty);
+    return;
   }
 
-  // Silme
-  if (deletable) {
-    const del = document.createElement('span');
-    del.className = 'source-del';
-    del.setAttribute('role', 'button');
-    del.setAttribute('aria-label', 'Kaynağı sil');
-    del.title = 'Sil';
-    del.textContent = '🗑';
-    del.addEventListener('click', (ev) => {
-      ev.stopPropagation();       // filtre tıklamasını tetikleme
-      if (confirm(`"${title}" kaynağı silinsin mi?`)) removeSource(id);
-    });
-    row.appendChild(del);
-  }
+  categoryGroups().forEach((group) => {
+    const title = document.createElement('div');
+    title.className = 'settings-group-title';
+    title.textContent = group.name;
+    list.appendChild(title);
+    group.sources.forEach((s) => list.appendChild(settingsSourceRow(s)));
+  });
+}
+
+// Ayarlar kaynak satırı (yönetim): simge kutusu + isim + kategori değiştir + sil.
+function settingsSourceRow(source) {
+  const row = document.createElement('div');
+  row.className = 'settings-row';
+
+  // Simge kutusu — tıklanınca simge menüsü (URL / cihazdan yükle / kaldır)
+  const iconBtn = document.createElement('button');
+  iconBtn.type = 'button';
+  iconBtn.className = 'settings-icon';
+  iconBtn.setAttribute('aria-label', 'Simge değiştir');
+  iconBtn.title = 'Simge';
+  iconBtn.appendChild(sourceBadgeEl(source, source.type === 'youtube' ? 'yt' : 'rss', source.title));
+  iconBtn.addEventListener('click', () => openIconMenu(source));
+  row.appendChild(iconBtn);
+
+  const name = document.createElement('span');
+  name.className = 'settings-name';
+  name.textContent = source.title;
+  row.appendChild(name);
+
+  // Kategori değiştir (⋯)
+  const catBtn = document.createElement('button');
+  catBtn.type = 'button';
+  catBtn.className = 'settings-cat';
+  catBtn.setAttribute('aria-label', 'Kategori değiştir');
+  catBtn.title = 'Kategori değiştir';
+  catBtn.textContent = '⋯';
+  catBtn.addEventListener('click', async () => {
+    const picked = await openCategorySheet(effCat(source));
+    if (picked !== null) {
+      source.category = picked === UNCATEGORIZED ? '' : picked;   // "Kategorisiz" → boş
+      persist();
+      ensureValidFilter();
+      renderSettings();
+      renderSources();
+      renderFeed();
+    }
+  });
+  row.appendChild(catBtn);
+
+  // Sil (🗑)
+  const del = document.createElement('button');
+  del.type = 'button';
+  del.className = 'settings-del';
+  del.setAttribute('aria-label', 'Kaynağı sil');
+  del.title = 'Sil';
+  del.textContent = '🗑';
+  del.addEventListener('click', () => {
+    if (confirm(`"${source.title}" kaynağı silinsin mi?`)) removeSource(source.id);
+  });
+  row.appendChild(del);
 
   return row;
+}
+
+function openSettings() {
+  renderSettings();
+  const v = $('#settings');
+  v.hidden = false;
+  requestAnimationFrame(() => v.classList.add('open'));   // sağdan kayış animasyonu
+}
+function closeSettings() {
+  const v = $('#settings');
+  v.classList.remove('open');
+  setTimeout(() => { v.hidden = true; }, 380);   // kayış bitince gizle
+  renderSources();   // ekleme/silme/kategori/simge değişiklikleri sidebar'a yansısın
+}
+function settingsOpen() {
+  return !$('#settings').hidden;
+}
+
+/* --------------------------------------------------------------------------
+   KAYNAK SİMGESİ — menü (URL / cihazdan yükle / kaldır) + görsel küçültme
+   -------------------------------------------------------------------------- */
+let _iconTarget = null;   // "Cihazdan yükle" için hedef kaynak (dosya seçici geri dönüşü)
+
+// Simge menüsü — kategori sheet'iyle aynı görsel dilde, dinamik alttan kayan sayfa.
+function openIconMenu(source) {
+  const wrap = document.createElement('div');
+  wrap.className = 'sheet-wrap icon-menu';   // 'icon-menu' → global ESC'i çakıştırmasın
+
+  const scrim = document.createElement('div');
+  scrim.className = 'sheet-scrim';
+  wrap.appendChild(scrim);
+
+  const sheet = document.createElement('div');
+  sheet.className = 'sheet';
+  sheet.setAttribute('role', 'dialog');
+  sheet.setAttribute('aria-modal', 'true');
+  sheet.setAttribute('aria-label', 'Simge');
+
+  const grip = document.createElement('div');
+  grip.className = 'sheet-grip';
+  sheet.appendChild(grip);
+  const title = document.createElement('div');
+  title.className = 'sheet-title';
+  title.textContent = 'Simge';
+  sheet.appendChild(title);
+
+  const listEl = document.createElement('div');
+  listEl.className = 'sheet-list';
+
+  const close = () => {
+    wrap.classList.remove('open');
+    document.removeEventListener('keydown', onKey);
+    setTimeout(() => wrap.remove(), 300);
+  };
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+
+  // a) URL yapıştır
+  listEl.appendChild(iconMenuItem('Bağlantı (URL) yapıştır', () => {
+    close();
+    const cur = source.icon && /^https?:/i.test(source.icon) ? source.icon : '';
+    const url = prompt('Görsel adresi (URL):', cur);
+    if (url && url.trim()) applyIconUrl(source, url.trim());
+  }));
+
+  // b) Cihazdan yükle (dosya seçici → küçült → data URL)
+  listEl.appendChild(iconMenuItem('Cihazdan yükle', () => {
+    close();
+    _iconTarget = source;
+    $('#iconFile').click();
+  }));
+
+  // c) Kaldır (yalnız simge varsa)
+  if (source.icon) {
+    listEl.appendChild(iconMenuItem('Simgeyi kaldır', () => {
+      close();
+      source.icon = '';
+      persist();
+      renderSettings();
+      renderSources();
+    }, true));
+  }
+
+  sheet.appendChild(listEl);
+
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'sheet-cancel';
+  cancel.textContent = 'Vazgeç';
+  cancel.addEventListener('click', close);
+  sheet.appendChild(cancel);
+
+  wrap.appendChild(sheet);
+  scrim.addEventListener('click', close);
+  document.addEventListener('keydown', onKey);
+  document.body.appendChild(wrap);
+  requestAnimationFrame(() => wrap.classList.add('open'));
+}
+
+function iconMenuItem(label, onClick, danger) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'sheet-item' + (danger ? ' danger' : '');
+  const lbl = document.createElement('span');
+  lbl.textContent = label;
+  b.appendChild(lbl);
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+// URL simgesini uygula (http(s) ya da data:image). Boyut sınırı yalnız data URL için.
+function applyIconUrl(source, url) {
+  if (!/^https?:\/\//i.test(url) && !/^data:image\//i.test(url)) {
+    setHint('Simge adresi http(s) ya da data:image olmalı.', 'error');
+    return;
+  }
+  if (/^data:/i.test(url) && url.length > MAX_ICON_BYTES) {
+    setHint('Simge çok büyük (en fazla 40 KB). Daha küçük bir görsel dene.', 'error');
+    return;
+  }
+  source.icon = url;
+  persist();
+  renderSettings();
+  renderSources();
+  setHint('Simge güncellendi.', '');
+}
+
+// Seçilen görseli 64×64 kare (cover/crop) JPEG data URL'e çevir + boyut sınırına sıkıştır.
+// Sonuç MAX_ICON_BYTES üstündeyse reddet (bulut senkronu şişirmesin).
+function resizeImageToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    if (!file || !file.type || !file.type.startsWith('image/')) {
+      reject(new Error('geçerli bir görsel değil'));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('dosya okunamadı'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('görsel çözümlenemedi'));
+      img.onload = () => {
+        const SIZE = 64;
+        const canvas = document.createElement('canvas');
+        canvas.width = SIZE;
+        canvas.height = SIZE;
+        const ctx = canvas.getContext('2d');
+        // cover/crop: kısa kenarı kareye sığdır, taşan kısmı ortadan kırp
+        const scale = Math.max(SIZE / img.width, SIZE / img.height);
+        const w = img.width * scale;
+        const h = img.height * scale;
+        ctx.drawImage(img, (SIZE - w) / 2, (SIZE - h) / 2, w, h);
+
+        // JPEG kalitesini kademeli düşürerek boyut sınırının altına in
+        let q = 0.85;
+        let url = canvas.toDataURL('image/jpeg', q);
+        while (url.length > MAX_ICON_BYTES && q > 0.3) {
+          q -= 0.15;
+          url = canvas.toDataURL('image/jpeg', q);
+        }
+        if (url.length > MAX_ICON_BYTES) {
+          reject(new Error('resim çok büyük, daha küçük bir tane dene'));
+          return;
+        }
+        resolve(url);
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 function renderFeed() {
@@ -1047,12 +1380,7 @@ function renderState() {
   if (visibleItems().length === 0) {
     box.hidden = false;
     box.textContent = '';
-    if (state.search.trim()) {
-      // Arama aktif ama sonuç yok → nazik "eşleşme yok"
-      stateMsg(box, 'Eşleşme yok', `"${state.search.trim()}" için sonuç bulunamadı.`);
-    } else {
-      stateMsg(box, 'Öğe yok', state.loading ? 'Yükleniyor…' : 'Bu filtrede gösterilecek bir şey bulunamadı.');
-    }
+    stateMsg(box, 'Öğe yok', state.loading ? 'Yükleniyor…' : 'Bu filtrede gösterilecek bir şey bulunamadı.');
     return;
   }
 
@@ -1075,59 +1403,6 @@ function setHint(msg, kind) {
 }
 
 /* --------------------------------------------------------------------------
-   DIŞA / İÇE AKTAR (JSON yedek)
-   -------------------------------------------------------------------------- */
-function exportSources() {
-  const data = {
-    app: CONFIG.APP_NAME,
-    version: 2,                    // v2: kaynaklar 'category' alanı içerir
-    exportedAt: new Date().toISOString(),
-    sources: state.sources,        // category alanı dahil tüm alanlar
-  };
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${CONFIG.APP_NAME}-kaynaklar.json`;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-function importSources(file) {
-  const reader = new FileReader();
-  reader.onload = () => {
-    try {
-      const data = JSON.parse(reader.result);
-      const incoming = Array.isArray(data) ? data : data.sources;
-      if (!Array.isArray(incoming)) throw new Error('Geçersiz dosya');
-
-      let added = 0;
-      incoming.forEach((s) => {
-        if (!s || !s.url) return;
-        if (state.sources.some((x) => x.url === s.url)) return;   // tekrarı atla
-        state.sources.push({
-          id: uid(),
-          title: s.title || hostname(s.url),
-          url: s.url,
-          type: s.type === 'youtube' ? 'youtube' : 'rss',
-          site: s.site || hostname(s.url),
-          // Kategori alanı; eski/eksik kayıtta boş (→ "Kategorisiz").
-          category: s.category ? String(s.category) : '',
-        });
-        added++;
-      });
-      persist();
-      setHint(`${added} kaynak içe aktarıldı.`, '');
-      renderSources();
-      refresh();
-    } catch (e) {
-      setHint('İçe aktarma hatası: ' + e.message, 'error');
-    }
-  };
-  reader.readAsText(file);
-}
-
-/* --------------------------------------------------------------------------
    ÇEKMECE (mobil) aç/kapa
    -------------------------------------------------------------------------- */
 function openSidebar() {
@@ -1137,30 +1412,6 @@ function openSidebar() {
 function closeSidebar() {
   $('#sidebar').classList.remove('open');
   $('#scrim').hidden = true;
-}
-
-/* --------------------------------------------------------------------------
-   ARAMA — toolbar'da açılan alan; canlı, filtreyle birlikte çalışır
-   -------------------------------------------------------------------------- */
-function openSearch() {
-  $('#searchBar').hidden = false;
-  $('#searchInput').focus();
-}
-function closeSearch() {
-  $('#searchBar').hidden = true;
-  $('#searchInput').value = '';
-  $('#btnSearchClear').hidden = true;
-  state.search = '';
-  renderFeed();               // normal akışa dön
-}
-function onSearchInput() {
-  const v = $('#searchInput').value;
-  state.search = v;
-  $('#btnSearchClear').hidden = !v;
-  renderFeed();               // canlı filtre
-}
-function searchActive() {
-  return !$('#searchBar').hidden;
 }
 
 /* --------------------------------------------------------------------------
@@ -1187,6 +1438,16 @@ function setupPullToRefresh() {
   }
 
   window.addEventListener('touchstart', (e) => {
+    // Pull-to-refresh YALNIZ ana feed alanında çalışsın. Sidebar/sheet
+    // içindeki dokunuşta devreye girmesin; yoksa touchmove'daki preventDefault
+    // o panellerin doğal kaydırmasını kilitler ("yenilendikten sonra kaymıyor").
+    if ($('#sidebar').classList.contains('open') ||
+        (e.target && e.target.closest &&
+         e.target.closest('.sidebar, .sheet-wrap'))) {
+      pulling = false;
+      return;
+    }
+
     // Sadece en üstteyken, tek parmakla, yükleme yokken başlat.
     if (state.loading || window.scrollY > 0 || e.touches.length !== 1) {
       pulling = false;
@@ -1346,41 +1607,45 @@ function bind() {
   $('#btnRefresh').addEventListener('click', refresh);
   $('#tabRefresh').addEventListener('click', refresh);
 
-  // Arama (toolbar ikonu + alt çubuk sekmesi)
-  $('#btnSearch').addEventListener('click', openSearch);
-  $('#tabSearch').addEventListener('click', openSearch);
-  $('#btnSearchCancel').addEventListener('click', closeSearch);
-  $('#searchInput').addEventListener('input', onSearchInput);
-  $('#btnSearchClear').addEventListener('click', () => {
-    $('#searchInput').value = '';
-    state.search = '';
-    $('#btnSearchClear').hidden = true;
-    $('#searchInput').focus();
-    renderFeed();
-  });
-
   // Çekmece aç/kapa
   $('#btnOpenSidebar').addEventListener('click', openSidebar);
   $('#tabSources').addEventListener('click', openSidebar);
   $('#btnCloseSidebar').addEventListener('click', closeSidebar);
   $('#scrim').addEventListener('click', closeSidebar);
 
+  // Ayarlar (tam ekran) aç/kapa
+  $('#btnOpenSettings').addEventListener('click', openSettings);
+  $('#btnCloseSettings').addEventListener('click', closeSettings);
+
+  // Simge: "Cihazdan yükle" dosya seçici geri dönüşü → küçült + uygula
+  $('#iconFile').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    e.target.value = '';                       // aynı dosya tekrar seçilebilsin
+    const source = _iconTarget;
+    _iconTarget = null;
+    if (!file || !source) return;
+    setHint('Simge işleniyor…', 'busy');
+    resizeImageToDataUrl(file).then((dataUrl) => {
+      source.icon = dataUrl;
+      persist();
+      renderSettings();
+      renderSources();
+      setHint('Simge güncellendi.', '');
+    }).catch((err) => {
+      setHint('Simge yüklenemedi: ' + err.message, 'error');
+    });
+  });
+
   // Tümünü okundu say
   $('#tabMarkAll').addEventListener('click', markAllRead);
 
-  // Dışa / içe aktar
-  $('#btnExport').addEventListener('click', exportSources);
-  $('#btnImport').addEventListener('click', () => $('#importFile').click());
-  $('#importFile').addEventListener('change', (e) => {
-    if (e.target.files[0]) importSources(e.target.files[0]);
-    e.target.value = '';
-  });
-
-  // ESC ile açık alt sayfayı / aramayı / çekmeceyi kapat
+  // ESC ile açık katmanı kapat (en üstteki katman öncelikli)
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
+    // Dinamik simge menüsü açıksa onu kendi ESC dinleyicisi kapatır — burada dokunma.
+    if (document.querySelector('.sheet-wrap.icon-menu.open')) return;
     if (!$('#sheet').hidden) closeSheet(null);
-    else if (searchActive()) closeSearch();
+    else if (settingsOpen()) closeSettings();
     else closeSidebar();
   });
 
@@ -1406,6 +1671,7 @@ function init() {
   bind();
   setupPullToRefresh();
   renderSources();
+  renderSettings();
   renderState();
 
   // Bulut anahtarı varsa açılışta çek + birleştir (sonra akışı yenile).

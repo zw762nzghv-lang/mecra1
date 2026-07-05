@@ -131,11 +131,14 @@ button {
   font-size: 20px;
   border-radius: 50%;
   color: var(--text);
-  transition: transform 0.2s var(--spring), background 0.2s ease;
+  /* Nötr "cam pul": hafif zemin + saç teli kenar (vurgu rengi değil) */
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  border: 1px solid var(--separator);
+  transition: transform 0.2s var(--spring), background 0.2s ease, border-color 0.2s ease;
 }
 .icon-btn:active {
   transform: scale(0.9);
-  background: color-mix(in srgb, var(--text) 8%, transparent);
+  background: color-mix(in srgb, var(--text) 14%, transparent);
 }
 
 /* ===================== Çekmece / Kenar ===================== */
@@ -260,18 +263,36 @@ button {
   place-items: center;
 }
 .source-count.has { color: #fff; background: var(--accent); }
-.source-del {
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
-  font-size: 15px;
-  color: var(--text-faint);
-  opacity: 0;
-  transition: opacity 0.15s ease, color 0.15s ease;
-}
-.source-item:focus-within .source-del { opacity: 1; }
 
-.sidebar-foot { display: flex; gap: 8px; }
+/* Kaynak simgesi — rozet (source-dot) yerine yuvarlak görsel (varsa) */
+.source-icon {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  border-radius: 8px;
+  object-fit: cover;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+/* Sidebar alt: tam ekran Ayarlar sayfasını açan buton */
+.settings-open-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 48px;
+  padding: 0 14px;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  transition: background 0.2s ease, transform 0.2s var(--spring);
+}
+.settings-open-btn:active { transform: scale(0.98); }
+.settings-open-ico { font-size: 18px; }
+.settings-open-lbl { flex: 1; text-align: left; }
+.settings-open-chev { color: var(--text-faint); font-size: 18px; }
 
 /* Bulut senkron bölümü */
 .cloud-sync {
@@ -341,13 +362,13 @@ button {
 .cat-chooser-val { flex: 1; text-align: left; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cat-chooser-chev { color: var(--text-faint); font-size: 16px; }
 
-/* Kategori grup başlığı */
+/* Kategori grup başlığı — akordeon toggle (tıkla: aç/kapat + filtrele) */
 .cat-header {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 12px 12px 4px;
+  padding: 10px 12px;
   margin-top: 6px;
   text-align: left;
   border-radius: var(--radius-sm);
@@ -366,21 +387,35 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* Grup altındaki kaynaklar hafif girintili */
-.source-item.nested { padding-left: 18px; }
-
-/* Kaynak satırı: kategori değiştir butonu (⋯) */
-.source-cat {
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
-  font-size: 18px;
+/* Akordeon oku: kapalı → sağa (›), açık → 90° dönüp aşağı bakar */
+.cat-chevron {
+  flex: 0 0 auto;
+  font-size: 16px;
   line-height: 1;
   color: var(--text-faint);
-  opacity: 0;
-  transition: opacity 0.15s ease, color 0.15s ease;
+  transform: rotate(0deg);
+  transition: transform 0.3s var(--spring);
 }
-.source-item:focus-within .source-cat { opacity: 1; }
+.cat-header.expanded .cat-chevron { transform: rotate(90deg); }
+
+/* Akordeon gövdesi: grid 0fr↔1fr ile yumuşak yükseklik animasyonu
+   (height:auto ile transition çalışmadığından bu teknik gerekli). */
+.cat-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.35s var(--spring);
+}
+.cat-body.open { grid-template-rows: 1fr; }
+.cat-body-inner {
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Grup altındaki kaynaklar hafif girintili */
+.source-item.nested { padding-left: 18px; }
 
 /* ===================== Kategori alt sayfası (action sheet) ===================== */
 .sheet-wrap { position: fixed; inset: 0; z-index: 60; }
@@ -464,6 +499,113 @@ button {
   font-weight: 600;
 }
 .sheet-cancel:active { background: color-mix(in srgb, var(--text) 6%, transparent); }
+.sheet-item.danger { color: #ff453a; }
+
+/* ===================== AYARLAR (tam ekran, sağdan kayan) ===================== */
+.settings-view {
+  position: fixed;
+  inset: 0;
+  z-index: 50;                        /* sidebar(40)/scrim(35) üstünde; sheet(60) altında */
+  display: flex;
+  flex-direction: column;
+  background: var(--glass-strong);
+  -webkit-backdrop-filter: blur(30px) saturate(180%);
+  backdrop-filter: blur(30px) saturate(180%);
+  transform: translateX(100%);
+  transition: transform 0.38s var(--spring);
+}
+.settings-view.open { transform: translateX(0); }
+
+.settings-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: calc(var(--sa-top) + 8px) calc(var(--sa-right) + 10px) 8px calc(var(--sa-left) + 10px);
+  border-bottom: 1px solid var(--glass-edge);
+}
+.settings-head .icon-btn { font-size: 30px; }
+.settings-title { flex: 1; text-align: center; font-size: 17px; font-weight: 700; }
+.settings-head-spacer { flex: 0 0 44px; width: 44px; }   /* başlığı optik ortalar */
+
+.settings-body {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 16px calc(var(--sa-right) + 16px) calc(var(--sa-bottom) + 32px) calc(var(--sa-left) + 16px);
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+.settings-section { display: flex; flex-direction: column; gap: 10px; }
+.settings-label {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.settings-list { display: flex; flex-direction: column; gap: 4px; }
+.settings-group-title {
+  margin-top: 10px;
+  padding: 0 4px 2px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.settings-group-title:first-child { margin-top: 0; }
+.settings-empty { padding: 4px; font-size: 14px; color: var(--text-dim); }
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  border: 1px solid var(--separator);
+}
+/* Simge kutusu — tıklanınca simge menüsü açılır */
+.settings-icon {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  transition: background 0.15s ease;
+}
+.settings-icon:active { background: color-mix(in srgb, var(--text) 8%, transparent); }
+.settings-icon .source-icon,
+.settings-icon .source-dot { width: 32px; height: 32px; flex-basis: 32px; }
+.settings-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.settings-cat,
+.settings-del {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  font-size: 18px;
+  color: var(--text-faint);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.settings-cat:active,
+.settings-del:active { background: color-mix(in srgb, var(--text) 8%, transparent); }
 
 /* ===================== Ana içerik ===================== */
 .main {
@@ -501,66 +643,6 @@ button {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-/* Arama çubuğu — bağımsız üst katman (mobil + masaüstü) */
-.search-bar {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 31;                       /* toolbar'ın (30) üstünde */
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: calc(var(--sa-top) + 56px);
-  padding: var(--sa-top) calc(var(--sa-right) + 12px) 0 calc(var(--sa-left) + 12px);
-  background: var(--glass);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
-  backdrop-filter: blur(24px) saturate(180%);
-  border-bottom: 1px solid var(--glass-edge);
-  transition: left 0.42s var(--spring);
-}
-.search-field {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  height: 38px;
-  padding: 0 8px 0 12px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--separator);
-  border-radius: var(--radius-sm);
-}
-.search-ico { color: var(--text-faint); font-size: 16px; }
-.search-input {
-  flex: 1;
-  min-width: 0;
-  height: 100%;
-  border: none;
-  background: none;
-  color: var(--text);
-  font-size: 16px;
-  outline: none;
-}
-.search-input::-webkit-search-cancel-button { display: none; }  /* kendi ✕'imizi kullanırız */
-.search-clear {
-  width: 26px;
-  height: 26px;
-  flex: 0 0 26px;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  font-size: 12px;
-  color: var(--text-faint);
-  background: color-mix(in srgb, var(--text) 12%, transparent);
-}
-.search-cancel {
-  flex: 0 0 auto;
-  color: var(--accent);
-  font-size: 16px;
-  font-weight: 500;
-  padding: 0 2px;
 }
 
 /* Aktif filtre adı — akışla kayan büyük başlık (iOS large-title) */
@@ -712,7 +794,7 @@ button {
   bottom: calc(var(--sa-bottom) + 14px);
   z-index: 30;
   display: flex;
-  gap: 2px;
+  gap: 4px;
   padding: 6px;
   /* Kenarlara yapışmasın: en fazla ekran genişliği eksi iki yandan boşluk */
   max-width: calc(100vw - 28px);
@@ -725,9 +807,9 @@ button {
   box-shadow: var(--shadow);
 }
 .tab-btn {
-  min-width: 56px;
+  min-width: 78px;
   min-height: 52px;
-  padding: 6px 10px;
+  padding: 8px 14px;
   border-radius: 22px;
   display: flex;
   flex-direction: column;
@@ -803,7 +885,6 @@ button {
   .sidebar { transform: translateX(0); box-shadow: none; }
   .main { padding-left: var(--sidebar-w); padding-top: calc(var(--sa-top) + 68px); }
   .toolbar { left: var(--sidebar-w); padding-left: 24px; }
-  .search-bar { left: var(--sidebar-w); }   /* arama çubuğu da kenar çubuğunu es geçsin */
   .large-title { display: none; }            /* masaüstünde başlık toolbar'da */
   .sidebar-close { display: none; }
   .tabbar { display: none; }
@@ -814,8 +895,8 @@ button {
 /* Küçük telefonlarda küçük görsel + kompakt sekmeler */
 @media (max-width: 380px) {
   .card-thumb { flex-basis: 96px; width: 96px; }
-  .tab-lbl { display: none; }
-  .tab-btn { min-width: 46px; padding: 6px 6px; }
+  /* 3 sekme dar ekrana da etiketleriyle sığar; yalnız biraz daralt */
+  .tab-btn { min-width: 62px; padding: 8px 8px; }
   .large-title { font-size: 28px; }
 }
 
@@ -827,13 +908,33 @@ button {
    satır ikonları dokunmada :focus-within ile görünür.
    ========================================================================== */
 @media (hover: hover) {
+  .icon-btn:hover {
+    background: color-mix(in srgb, var(--text) 11%, transparent);
+    border-color: color-mix(in srgb, var(--text) 20%, transparent);
+  }
   .source-item:hover { background: color-mix(in srgb, var(--text) 5%, transparent); }
-  .source-item:hover .source-del,
-  .source-item:hover .source-cat { opacity: 1; }
-  .source-del:hover { color: #ff453a; }
-  .source-cat:hover { color: var(--accent); }
+  .cat-header:hover { background: color-mix(in srgb, var(--text) 4%, transparent); }
+  .settings-open-btn:hover { background: color-mix(in srgb, var(--text) 10%, transparent); }
+  /* Ayarlar'daki kaynak yönetim satırı ikonları */
+  .settings-row:hover { border-color: color-mix(in srgb, var(--text) 22%, transparent); }
+  .settings-icon:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
+  .settings-cat:hover { color: var(--accent); }
+  .settings-del:hover { color: #ff453a; }
   .cloud-btn:hover { color: var(--accent); }
   .tab-btn:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+}
+
+/* ==========================================================================
+   DOKUNMATİK — hover'sız / kaba işaretçili cihazlar (telefon, tablet)
+   Sidebar filtre satırlarında artık aksiyon ikonu yok (hepsi Ayarlar'da).
+   Burada yalnız Ayarlar'daki yönetim ikonları + akordeon oku için rahat
+   (≥40px) dokunma hedefi garanti ediyoruz; bunlar zaten daima görünür.
+   ========================================================================== */
+@media (hover: none), (pointer: coarse) {
+  .settings-icon,
+  .settings-cat,
+  .settings-del { min-width: 40px; min-height: 40px; }
+  .cat-chevron { min-width: 22px; text-align: center; }
 }
 
 /* Hareket azaltma tercihi */

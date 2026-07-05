@@ -27,63 +27,22 @@
   <!-- Çekmece perdesi (mobilde kaynak listesi açılınca arkayı karartır) -->
   <div id="scrim" class="scrim" hidden></div>
 
-  <!-- ============ KENAR / ÇEKMECE: kaynak listesi ============ -->
+  <!-- ============ KENAR / ÇEKMECE: sadece filtre + Ayarlar ============ -->
   <aside id="sidebar" class="sidebar" aria-label="Kaynaklar">
     <div class="sidebar-head">
       <h1 class="brand" id="brandName">mecra</h1>
       <button class="icon-btn sidebar-close" id="btnCloseSidebar" aria-label="Kapat" title="Kapat">✕</button>
     </div>
 
-    <!-- Kaynak ekleme kutusu -->
-    <form id="addForm" class="add-form" autocomplete="off">
-      <input
-        id="addInput"
-        class="add-input"
-        type="text"
-        inputmode="url"
-        placeholder="RSS, site ya da YouTube adresi…"
-        aria-label="Kaynak adresi"
-      />
-      <button class="btn-primary" type="submit" id="btnAdd">Ekle</button>
-    </form>
-
-    <!-- Yeni kaynağın kategorisini seç (alt sayfayı açar) -->
-    <button type="button" id="catChooser" class="cat-chooser" aria-label="Kategori seç">
-      <span class="cat-chooser-key">Kategori</span>
-      <span id="catChooserLabel" class="cat-chooser-val">Kategorisiz</span>
-      <span class="cat-chooser-chev" aria-hidden="true">⌄</span>
-    </button>
-
-    <p id="addHint" class="add-hint" role="status" aria-live="polite"></p>
-
-    <!-- Filtre / kaynak listesi -->
+    <!-- Filtre / kaynak listesi (kategori akordeonu) -->
     <nav class="source-list" id="sourceList" aria-label="Kaynak filtreleri"></nav>
 
-    <!-- Bulut senkron (tek gizli anahtar) -->
-    <div class="cloud-sync">
-      <div class="cloud-row">
-        <input
-          id="cloudKeyInput"
-          class="cloud-input"
-          type="password"
-          inputmode="text"
-          autocomplete="off"
-          spellcheck="false"
-          placeholder="Bulut anahtarı (isteğe bağlı)"
-          aria-label="Bulut senkron anahtarı"
-        />
-        <button type="button" id="cloudReveal" class="cloud-btn" title="Göster/gizle" aria-label="Anahtarı göster/gizle">👁</button>
-        <button type="button" id="cloudGen" class="cloud-btn" title="Rastgele oluştur" aria-label="Rastgele anahtar oluştur">⟲</button>
-      </div>
-      <p id="cloudStatus" class="cloud-status" role="status" aria-live="polite"></p>
-    </div>
-
-    <!-- Yedekleme aksiyonları -->
-    <div class="sidebar-foot">
-      <button class="btn-ghost" id="btnExport">Dışa aktar</button>
-      <button class="btn-ghost" id="btnImport">İçe aktar</button>
-      <input id="importFile" type="file" accept="application/json,.json" hidden />
-    </div>
+    <!-- Yönetim: tam ekran Ayarlar sayfasını açar -->
+    <button type="button" class="settings-open-btn" id="btnOpenSettings" aria-label="Ayarlar">
+      <span class="settings-open-ico" aria-hidden="true">⚙</span>
+      <span class="settings-open-lbl">Ayarlar</span>
+      <span class="settings-open-chev" aria-hidden="true">›</span>
+    </button>
   </aside>
 
   <!-- ============ ANA İÇERİK ============ -->
@@ -92,20 +51,8 @@
     <header class="toolbar" id="toolbar">
       <button class="icon-btn" id="btnOpenSidebar" aria-label="Kaynaklar" title="Kaynaklar">☰</button>
       <div class="toolbar-title" id="toolbarTitle">Hepsi</div>
-      <button class="icon-btn" id="btnSearch" aria-label="Ara" title="Ara">⌕</button>
       <button class="icon-btn" id="btnRefresh" aria-label="Yenile" title="Yenile">⟳</button>
     </header>
-
-    <!-- Arama çubuğu (bağımsız üst katman; mobil + masaüstü) -->
-    <div class="search-bar" id="searchBar" hidden>
-      <div class="search-field">
-        <span class="search-ico" aria-hidden="true">⌕</span>
-        <input id="searchInput" class="search-input" type="search" inputmode="search"
-               autocomplete="off" spellcheck="false" placeholder="Başlıkta ve özette ara" aria-label="Ara" />
-        <button type="button" id="btnSearchClear" class="search-clear" aria-label="Temizle" hidden>✕</button>
-      </div>
-      <button type="button" id="btnSearchCancel" class="search-cancel">Vazgeç</button>
-    </div>
 
     <!-- Aşağı çek-yenile göstergesi (mobil) -->
     <div id="ptr" class="ptr" aria-hidden="true"><div class="ptr-spin"></div></div>
@@ -128,13 +75,75 @@
     <button class="tab-btn" id="tabRefresh" aria-label="Yenile">
       <span class="tab-ico">⟳</span><span class="tab-lbl">Yenile</span>
     </button>
-    <button class="tab-btn" id="tabSearch" aria-label="Ara">
-      <span class="tab-ico">⌕</span><span class="tab-lbl">Ara</span>
-    </button>
     <button class="tab-btn" id="tabMarkAll" aria-label="Tümünü okundu say">
       <span class="tab-ico">✓</span><span class="tab-lbl">Okundu</span>
     </button>
   </nav>
+
+  <!-- ============ AYARLAR (tam ekran, sağdan kayan görünüm) ============ -->
+  <div id="settings" class="settings-view" hidden aria-label="Ayarlar">
+    <header class="settings-head">
+      <button class="icon-btn" id="btnCloseSettings" aria-label="Geri" title="Geri">‹</button>
+      <div class="settings-title">Ayarlar</div>
+      <span class="settings-head-spacer" aria-hidden="true"></span>
+    </header>
+
+    <div class="settings-body">
+      <!-- Kaynak ekleme -->
+      <section class="settings-section">
+        <h2 class="settings-label">Kaynak ekle</h2>
+        <form id="addForm" class="add-form" autocomplete="off">
+          <input
+            id="addInput"
+            class="add-input"
+            type="text"
+            inputmode="url"
+            placeholder="RSS, site ya da YouTube adresi…"
+            aria-label="Kaynak adresi"
+          />
+          <button class="btn-primary" type="submit" id="btnAdd">Ekle</button>
+        </form>
+        <!-- Yeni kaynağın kategorisini seç (alt sayfayı açar) -->
+        <button type="button" id="catChooser" class="cat-chooser" aria-label="Kategori seç">
+          <span class="cat-chooser-key">Kategori</span>
+          <span id="catChooserLabel" class="cat-chooser-val">Kategorisiz</span>
+          <span class="cat-chooser-chev" aria-hidden="true">⌄</span>
+        </button>
+        <p id="addHint" class="add-hint" role="status" aria-live="polite"></p>
+      </section>
+
+      <!-- Kaynak yönetimi (kategori değiştir / simge / sil) -->
+      <section class="settings-section">
+        <h2 class="settings-label">Kaynaklar</h2>
+        <div class="settings-list" id="settingsList"></div>
+      </section>
+
+      <!-- Bulut senkron (tek gizli anahtar) -->
+      <section class="settings-section">
+        <h2 class="settings-label">Bulut senkron</h2>
+        <div class="cloud-sync">
+          <div class="cloud-row">
+            <input
+              id="cloudKeyInput"
+              class="cloud-input"
+              type="password"
+              inputmode="text"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="Bulut anahtarı (isteğe bağlı)"
+              aria-label="Bulut senkron anahtarı"
+            />
+            <button type="button" id="cloudReveal" class="cloud-btn" title="Göster/gizle" aria-label="Anahtarı göster/gizle">👁</button>
+            <button type="button" id="cloudGen" class="cloud-btn" title="Rastgele oluştur" aria-label="Rastgele anahtar oluştur">⟲</button>
+          </div>
+          <p id="cloudStatus" class="cloud-status" role="status" aria-live="polite"></p>
+        </div>
+      </section>
+    </div>
+
+    <!-- Simge yüklemek için gizli dosya seçici (hedef kaynak: _iconTarget) -->
+    <input id="iconFile" type="file" accept="image/*" hidden />
+  </div>
 
   <!-- ============ KATEGORİ ALT SAYFASI (iOS action sheet) ============ -->
   <div id="sheet" class="sheet-wrap" hidden>
