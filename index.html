@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <!-- Responsive + iOS: viewport-fit=cover çentikli cihazlarda safe-area için şart -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=5" />
+  <meta name="color-scheme" content="light dark" />
+  <!-- Adres çubuğu rengi (açık/koyu ayrı) -->
+  <meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
+
+  <!-- PWA -->
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+
+  <!-- iOS Safari: tam ekran "Ana Ekrana Ekle" davranışı -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="mecra" />
+
+  <title>mecra</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Çekmece perdesi (mobilde kaynak listesi açılınca arkayı karartır) -->
+  <div id="scrim" class="scrim" hidden></div>
+
+  <!-- ============ KENAR / ÇEKMECE: kaynak listesi ============ -->
+  <aside id="sidebar" class="sidebar" aria-label="Kaynaklar">
+    <div class="sidebar-head">
+      <h1 class="brand" id="brandName">mecra</h1>
+      <button class="icon-btn sidebar-close" id="btnCloseSidebar" aria-label="Kapat" title="Kapat">✕</button>
+    </div>
+
+    <!-- Kaynak ekleme kutusu -->
+    <form id="addForm" class="add-form" autocomplete="off">
+      <input
+        id="addInput"
+        class="add-input"
+        type="text"
+        inputmode="url"
+        placeholder="RSS, site ya da YouTube adresi…"
+        aria-label="Kaynak adresi"
+      />
+      <button class="btn-primary" type="submit" id="btnAdd">Ekle</button>
+    </form>
+
+    <!-- Yeni kaynağın kategorisini seç (alt sayfayı açar) -->
+    <button type="button" id="catChooser" class="cat-chooser" aria-label="Kategori seç">
+      <span class="cat-chooser-key">Kategori</span>
+      <span id="catChooserLabel" class="cat-chooser-val">Kategorisiz</span>
+      <span class="cat-chooser-chev" aria-hidden="true">⌄</span>
+    </button>
+
+    <p id="addHint" class="add-hint" role="status" aria-live="polite"></p>
+
+    <!-- Filtre / kaynak listesi -->
+    <nav class="source-list" id="sourceList" aria-label="Kaynak filtreleri"></nav>
+
+    <!-- Bulut senkron (tek gizli anahtar) -->
+    <div class="cloud-sync">
+      <div class="cloud-row">
+        <input
+          id="cloudKeyInput"
+          class="cloud-input"
+          type="password"
+          inputmode="text"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="Bulut anahtarı (isteğe bağlı)"
+          aria-label="Bulut senkron anahtarı"
+        />
+        <button type="button" id="cloudReveal" class="cloud-btn" title="Göster/gizle" aria-label="Anahtarı göster/gizle">👁</button>
+        <button type="button" id="cloudGen" class="cloud-btn" title="Rastgele oluştur" aria-label="Rastgele anahtar oluştur">⟲</button>
+      </div>
+      <p id="cloudStatus" class="cloud-status" role="status" aria-live="polite"></p>
+    </div>
+
+    <!-- Yedekleme aksiyonları -->
+    <div class="sidebar-foot">
+      <button class="btn-ghost" id="btnExport">Dışa aktar</button>
+      <button class="btn-ghost" id="btnImport">İçe aktar</button>
+      <input id="importFile" type="file" accept="application/json,.json" hidden />
+    </div>
+  </aside>
+
+  <!-- ============ ANA İÇERİK ============ -->
+  <main class="main">
+    <!-- Üstte yüzen cam toolbar (mobilde gizlenir; ☰/⟳/⌕ alt çubukta) -->
+    <header class="toolbar" id="toolbar">
+      <button class="icon-btn" id="btnOpenSidebar" aria-label="Kaynaklar" title="Kaynaklar">☰</button>
+      <div class="toolbar-title" id="toolbarTitle">Hepsi</div>
+      <button class="icon-btn" id="btnSearch" aria-label="Ara" title="Ara">⌕</button>
+      <button class="icon-btn" id="btnRefresh" aria-label="Yenile" title="Yenile">⟳</button>
+    </header>
+
+    <!-- Arama çubuğu (bağımsız üst katman; mobil + masaüstü) -->
+    <div class="search-bar" id="searchBar" hidden>
+      <div class="search-field">
+        <span class="search-ico" aria-hidden="true">⌕</span>
+        <input id="searchInput" class="search-input" type="search" inputmode="search"
+               autocomplete="off" spellcheck="false" placeholder="Başlıkta ve özette ara" aria-label="Ara" />
+        <button type="button" id="btnSearchClear" class="search-clear" aria-label="Temizle" hidden>✕</button>
+      </div>
+      <button type="button" id="btnSearchCancel" class="search-cancel">Vazgeç</button>
+    </div>
+
+    <!-- Aşağı çek-yenile göstergesi (mobil) -->
+    <div id="ptr" class="ptr" aria-hidden="true"><div class="ptr-spin"></div></div>
+
+    <!-- Aktif filtre adı — akışla birlikte kayan büyük başlık (iOS large-title) -->
+    <h1 id="largeTitle" class="large-title">Hepsi</h1>
+
+    <!-- Akış -->
+    <section class="feed" id="feed" aria-live="polite"></section>
+
+    <!-- Boş / yükleniyor durumları -->
+    <div class="state" id="stateBox" hidden></div>
+  </main>
+
+  <!-- ============ MOBİL ALT AKSİYON ÇUBUĞU (yüzen) ============ -->
+  <nav class="tabbar" aria-label="Hızlı aksiyonlar">
+    <button class="tab-btn" id="tabSources" aria-label="Kaynaklar">
+      <span class="tab-ico">☰</span><span class="tab-lbl">Kaynaklar</span>
+    </button>
+    <button class="tab-btn" id="tabRefresh" aria-label="Yenile">
+      <span class="tab-ico">⟳</span><span class="tab-lbl">Yenile</span>
+    </button>
+    <button class="tab-btn" id="tabSearch" aria-label="Ara">
+      <span class="tab-ico">⌕</span><span class="tab-lbl">Ara</span>
+    </button>
+    <button class="tab-btn" id="tabMarkAll" aria-label="Tümünü okundu say">
+      <span class="tab-ico">✓</span><span class="tab-lbl">Okundu</span>
+    </button>
+  </nav>
+
+  <!-- ============ KATEGORİ ALT SAYFASI (iOS action sheet) ============ -->
+  <div id="sheet" class="sheet-wrap" hidden>
+    <div class="sheet-scrim" id="sheetScrim"></div>
+    <div class="sheet" role="dialog" aria-modal="true" aria-label="Kategori seç">
+      <div class="sheet-grip" aria-hidden="true"></div>
+      <div class="sheet-title">Kategori</div>
+      <div class="sheet-list" id="sheetList"></div>
+      <form class="sheet-new" id="sheetNewForm" hidden autocomplete="off">
+        <input id="sheetNewInput" class="add-input" type="text" placeholder="Yeni kategori adı" aria-label="Yeni kategori adı" />
+        <button class="btn-primary" type="submit">Ekle</button>
+      </form>
+      <button type="button" class="sheet-newtoggle" id="sheetNewToggle">+ Yeni kategori</button>
+      <button type="button" class="sheet-cancel" id="sheetCancel">Vazgeç</button>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
