@@ -177,7 +177,7 @@ button {
   letter-spacing: -0.02em;
   margin: 0;
 }
-.sidebar-close { display: flex; }
+.sidebar-close { display: grid; }
 
 .add-form { display: flex; gap: 8px; }
 .add-input {
@@ -361,6 +361,37 @@ button {
 .cat-chooser-key { color: var(--text-faint); }
 .cat-chooser-val { flex: 1; text-align: left; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cat-chooser-chev { color: var(--text-faint); font-size: 16px; }
+
+/* Alt sayfaya götüren satır-buton (ör. "Kanallar") */
+.nav-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 14px 16px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  border: 1px solid var(--separator);
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 600;
+  transition: border-color 0.2s ease, background 0.15s ease;
+}
+.nav-row:active { background: color-mix(in srgb, var(--text) 6%, transparent); }
+.nav-row-label { flex: 1; text-align: left; }
+.nav-row-count {
+  min-width: 26px;
+  height: 22px;
+  padding: 0 8px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+  color: var(--text-dim);
+  font-size: 13px;
+  font-weight: 700;
+}
+.nav-row-chev { color: var(--text-faint); font-size: 22px; line-height: 1; }
 
 /* Kategori grup başlığı — akordeon toggle (tıkla: aç/kapat + filtrele) */
 .cat-header {
@@ -592,8 +623,7 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.settings-cat,
-.settings-del {
+.settings-menu {
   flex: 0 0 auto;
   width: 40px;
   height: 40px;
@@ -604,8 +634,7 @@ button {
   color: var(--text-faint);
   transition: background 0.15s ease, color 0.15s ease;
 }
-.settings-cat:active,
-.settings-del:active { background: color-mix(in srgb, var(--text) 8%, transparent); }
+.settings-menu:active { background: color-mix(in srgb, var(--text) 8%, transparent); }
 
 /* ===================== Ana içerik ===================== */
 .main {
@@ -679,6 +708,23 @@ button {
 }
 .card:active { transform: scale(0.985); box-shadow: var(--shadow); }
 .card.read { opacity: 0.5; }   /* okununca sönükleşir */
+
+/* Okunan kart akıştan yumuşakça çıkar: daralır + solar (yer kaplamaz). */
+.card.leaving {
+  max-height: 0 !important;
+  min-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  margin-top: -12px;   /* flex boşluğunu (gap) telafi et → alttakiler zıplamaz */
+  opacity: 0;
+  transform: scale(0.98);
+  overflow: hidden;
+  pointer-events: none;
+  border-width: 0;
+  transition: max-height 0.32s var(--spring), padding 0.32s var(--spring),
+    margin 0.32s var(--spring), opacity 0.24s ease,
+    transform 0.32s var(--spring), border-width 0.32s var(--spring);
+}
 
 /* Video kartı (YouTube): dikey — üstte büyük 16:9 görsel, altında başlık. */
 .card.video { flex-direction: column; gap: 12px; padding: 12px; }
@@ -915,11 +961,11 @@ button {
   .source-item:hover { background: color-mix(in srgb, var(--text) 5%, transparent); }
   .cat-header:hover { background: color-mix(in srgb, var(--text) 4%, transparent); }
   .settings-open-btn:hover { background: color-mix(in srgb, var(--text) 10%, transparent); }
+  .nav-row:hover { border-color: color-mix(in srgb, var(--text) 22%, transparent); }
   /* Ayarlar'daki kaynak yönetim satırı ikonları */
   .settings-row:hover { border-color: color-mix(in srgb, var(--text) 22%, transparent); }
   .settings-icon:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
-  .settings-cat:hover { color: var(--accent); }
-  .settings-del:hover { color: #ff453a; }
+  .settings-menu:hover { color: var(--accent); }
   .cloud-btn:hover { color: var(--accent); }
   .tab-btn:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
 }
@@ -932,8 +978,7 @@ button {
    ========================================================================== */
 @media (hover: none), (pointer: coarse) {
   .settings-icon,
-  .settings-cat,
-  .settings-del { min-width: 40px; min-height: 40px; }
+  .settings-menu { min-width: 40px; min-height: 40px; }
   .cat-chevron { min-width: 22px; text-align: center; }
 }
 

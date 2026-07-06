@@ -1006,6 +1006,7 @@ function sourceRow({ id, title, kind, count, active, source, nested }) {
 
 // Ayarlar'daki kaynak yönetim listesi: kategoriye göre gruplu düz liste (akordeon YOK).
 function renderSettings() {
+  updateChannelsCount();            // "Kanallar" butonundaki sayı her zaman güncel kalsın
   const list = $('#settingsList');
   if (!list) return;
   list.textContent = '';
@@ -1047,14 +1048,77 @@ function settingsSourceRow(source) {
   name.textContent = source.title;
   row.appendChild(name);
 
-  // Kategori değiştir (⋯)
-  const catBtn = document.createElement('button');
-  catBtn.type = 'button';
-  catBtn.className = 'settings-cat';
-  catBtn.setAttribute('aria-label', 'Kategori değiştir');
-  catBtn.title = 'Kategori değiştir';
-  catBtn.textContent = '⋯';
-  catBtn.addEventListener('click', async () => {
+  // Yönetim menüsü (⋯) — tıklanınca düzenle/sil sayfası açılır
+  const menuBtn = document.createElement('button');
+  menuBtn.type = 'button';
+  menuBtn.className = 'settings-menu';
+  menuBtn.setAttribute('aria-label', 'Kaynağı düzenle');
+  menuBtn.title = 'Düzenle';
+  menuBtn.textContent = '⋯';
+  menuBtn.addEventListener('click', () => openManageMenu(source));
+  row.appendChild(menuBtn);
+
+  return row;
+}
+
+/* --------------------------------------------------------------------------
+   KAYNAK YÖNETİM MENÜSÜ — düzenle/sil (isim, simge, kategori, sil)
+   Simge menüsüyle aynı görsel dilde, alttan kayan sayfa.
+   -------------------------------------------------------------------------- */
+function openManageMenu(source) {
+  const wrap = document.createElement('div');
+  wrap.className = 'sheet-wrap icon-menu';   // 'icon-menu' → global ESC'i çakıştırmasın
+
+  const scrim = document.createElement('div');
+  scrim.className = 'sheet-scrim';
+  wrap.appendChild(scrim);
+
+  const sheet = document.createElement('div');
+  sheet.className = 'sheet';
+  sheet.setAttribute('role', 'dialog');
+  sheet.setAttribute('aria-modal', 'true');
+  sheet.setAttribute('aria-label', 'Kaynağı düzenle');
+
+  const grip = document.createElement('div');
+  grip.className = 'sheet-grip';
+  sheet.appendChild(grip);
+  const title = document.createElement('div');
+  title.className = 'sheet-title';
+  title.textContent = source.title;
+  sheet.appendChild(title);
+
+  const listEl = document.createElement('div');
+  listEl.className = 'sheet-list';
+
+  const close = () => {
+    wrap.classList.remove('open');
+    document.removeEventListener('keydown', onKey);
+    setTimeout(() => wrap.remove(), 300);
+  };
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+
+  // a) İsmi değiştir
+  listEl.appendChild(iconMenuItem('İsmi değiştir', () => {
+    close();
+    const name = prompt('Kaynak adı:', source.title);
+    if (name && name.trim()) {
+      source.title = name.trim();
+      persist();
+      renderSettings();
+      renderSources();
+      renderFeed();
+    }
+  }));
+
+  // b) Simgeyi değiştir → mevcut simge menüsünü aç
+  listEl.appendChild(iconMenuItem('Simgeyi değiştir', () => {
+    close();
+    openIconMenu(source);
+  }));
+
+  // c) Kategori değiştir
+  listEl.appendChild(iconMenuItem('Kategori değiştir', async () => {
+    close();
     const picked = await openCategorySheet(effCat(source));
     if (picked !== null) {
       source.category = picked === UNCATEGORIZED ? '' : picked;   // "Kategorisiz" → boş
@@ -1064,22 +1128,28 @@ function settingsSourceRow(source) {
       renderSources();
       renderFeed();
     }
-  });
-  row.appendChild(catBtn);
+  }));
 
-  // Sil (🗑)
-  const del = document.createElement('button');
-  del.type = 'button';
-  del.className = 'settings-del';
-  del.setAttribute('aria-label', 'Kaynağı sil');
-  del.title = 'Sil';
-  del.textContent = '🗑';
-  del.addEventListener('click', () => {
+  // d) Kaynağı sil (tehlikeli)
+  listEl.appendChild(iconMenuItem('Kaynağı sil', () => {
+    close();
     if (confirm(`"${source.title}" kaynağı silinsin mi?`)) removeSource(source.id);
-  });
-  row.appendChild(del);
+  }, true));
 
-  return row;
+  sheet.appendChild(listEl);
+
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'sheet-cancel';
+  cancel.textContent = 'Vazgeç';
+  cancel.addEventListener('click', close);
+  sheet.appendChild(cancel);
+
+  wrap.appendChild(sheet);
+  scrim.addEventListener('click', close);
+  document.addEventListener('keydown', onKey);
+  document.body.appendChild(wrap);
+  requestAnimationFrame(() => wrap.classList.add('open'));
 }
 
 function openSettings() {
@@ -1096,6 +1166,29 @@ function closeSettings() {
 }
 function settingsOpen() {
   return !$('#settings').hidden;
+}
+
+// Kanallar sayfası (Ayarlar üstünde açılan ayrı tam-ekran görünüm)
+function openChannels() {
+  renderSettings();                 // kaynak listesini kur (#settingsList kanallar sayfasında)
+  const v = $('#channels');
+  v.hidden = false;
+  requestAnimationFrame(() => v.classList.add('open'));   // sağdan kayış animasyonu
+}
+function closeChannels() {
+  const v = $('#channels');
+  v.classList.remove('open');
+  setTimeout(() => { v.hidden = true; }, 380);   // kayış bitince gizle
+  renderSources();   // ekleme/silme/kategori/simge değişiklikleri sidebar'a yansısın
+}
+function channelsOpen() {
+  return !$('#channels').hidden;
+}
+
+// "Kanallar" butonundaki kaynak sayısını güncelle.
+function updateChannelsCount() {
+  const el = $('#channelsCount');
+  if (el) el.textContent = state.sources.length;
 }
 
 /* --------------------------------------------------------------------------
@@ -1253,7 +1346,8 @@ function resizeImageToDataUrl(file) {
 function renderFeed() {
   const feed = $('#feed');
   feed.textContent = '';
-  const items = visibleItems();
+  // Okunan öğeler akışta yer kaplamasın (görüldükten sonra kaybolsunlar).
+  const items = visibleItems().filter((it) => !state.read.has(it.id));
 
   for (const it of items) {
     feed.appendChild(card(it));
@@ -1339,12 +1433,14 @@ function card(it) {
   body.appendChild(meta);
   a.appendChild(body);
 
-  // Tıklayınca okundu işaretle (link yeni sekmede açılır)
+  // Tıklayınca okundu işaretle (link yeni sekmede açılır) ve kartı akıştan çıkar.
   a.addEventListener('click', () => {
     markRead(it.id);
-    a.classList.add('read');
-    const um = a.querySelector('.unread-mark');
-    if (um) um.remove();
+    // Yumuşak kayboluş: önce mevcut yüksekliği sabitle, sonra 0'a daralt.
+    a.style.maxHeight = a.offsetHeight + 'px';
+    void a.offsetHeight;               // reflow → daralma animasyonu tetiklensin
+    a.classList.add('leaving');
+    setTimeout(() => { a.remove(); renderState(); }, 340);
   });
 
   return a;
@@ -1617,6 +1713,10 @@ function bind() {
   $('#btnOpenSettings').addEventListener('click', openSettings);
   $('#btnCloseSettings').addEventListener('click', closeSettings);
 
+  // Kanallar (tam ekran) aç/kapa — Ayarlar üstünde açılır
+  $('#btnOpenChannels').addEventListener('click', openChannels);
+  $('#btnCloseChannels').addEventListener('click', closeChannels);
+
   // Simge: "Cihazdan yükle" dosya seçici geri dönüşü → küçült + uygula
   $('#iconFile').addEventListener('change', (e) => {
     const file = e.target.files[0];
@@ -1645,6 +1745,7 @@ function bind() {
     // Dinamik simge menüsü açıksa onu kendi ESC dinleyicisi kapatır — burada dokunma.
     if (document.querySelector('.sheet-wrap.icon-menu.open')) return;
     if (!$('#sheet').hidden) closeSheet(null);
+    else if (channelsOpen()) closeChannels();
     else if (settingsOpen()) closeSettings();
     else closeSidebar();
   });

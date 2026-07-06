@@ -112,10 +112,13 @@
         <p id="addHint" class="add-hint" role="status" aria-live="polite"></p>
       </section>
 
-      <!-- Kaynak yönetimi (kategori değiştir / simge / sil) -->
+      <!-- Kanallar sayfasını açan buton (kaynak yönetimi ayrı sayfada) -->
       <section class="settings-section">
-        <h2 class="settings-label">Kaynaklar</h2>
-        <div class="settings-list" id="settingsList"></div>
+        <button type="button" id="btnOpenChannels" class="nav-row" aria-label="Kanallar">
+          <span class="nav-row-label">Kanallar</span>
+          <span id="channelsCount" class="nav-row-count">0</span>
+          <span class="nav-row-chev" aria-hidden="true">›</span>
+        </button>
       </section>
 
       <!-- Bulut senkron (tek gizli anahtar) -->
@@ -143,6 +146,22 @@
 
     <!-- Simge yüklemek için gizli dosya seçici (hedef kaynak: _iconTarget) -->
     <input id="iconFile" type="file" accept="image/*" hidden />
+  </div>
+
+  <!-- ============ KANALLAR (tam ekran, sağdan kayan görünüm) ============ -->
+  <div id="channels" class="settings-view" hidden aria-label="Kanallar">
+    <header class="settings-head">
+      <button class="icon-btn" id="btnCloseChannels" aria-label="Geri" title="Geri">‹</button>
+      <div class="settings-title">Kanallar</div>
+      <span class="settings-head-spacer" aria-hidden="true"></span>
+    </header>
+
+    <div class="settings-body">
+      <!-- Kaynak yönetimi (kategori değiştir / simge / sil) -->
+      <section class="settings-section">
+        <div class="settings-list" id="settingsList"></div>
+      </section>
+    </div>
   </div>
 
   <!-- ============ KATEGORİ ALT SAYFASI (iOS action sheet) ============ -->
