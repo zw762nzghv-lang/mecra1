@@ -5,7 +5,7 @@
    ========================================================================== */
 
 // Kabuk dosyaları her değiştiğinde bu sürümü artır → eski önbellek atılır, taze sunulur.
-const CACHE = 'mecra-shell-v14';
+const CACHE = 'mecra-shell-v16';
 
 // Uygulama kabuğu — çevrimdışı açılış için gereken statik dosyalar.
 const SHELL = [

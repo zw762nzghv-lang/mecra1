@@ -1,16 +1,18 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="mecra">
-  <!-- iOS tarzı yuvarlak köşeli zemin + mavi degrade -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="mecra RSS">
+  <!-- Siyah zemin + neon lacivert yazılar -->
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#0a84ff"/>
-      <stop offset="1" stop-color="#0060df"/>
-    </linearGradient>
+    <filter id="neon" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
   </defs>
-  <rect width="512" height="512" rx="114" fill="url(#bg)"/>
-  <!-- RSS: sol-alt köşeden çıkan iki dalga + nokta -->
-  <g fill="none" stroke="#ffffff" stroke-width="40" stroke-linecap="round">
-    <path d="M160 240 A192 192 0 0 1 352 432"/>
-    <path d="M160 320 A112 112 0 0 1 272 432"/>
+  <rect width="512" height="512" rx="114" fill="#000000"/>
+  <g fill="#1e3aff" filter="url(#neon)" text-anchor="middle"
+     font-family="Arial, Helvetica, sans-serif" font-weight="700">
+    <text x="256" y="270" font-size="260">M</text>
+    <text x="256" y="410" font-size="120" letter-spacing="6">RSS</text>
   </g>
-  <circle cx="176" cy="416" r="30" fill="#ffffff"/>
 </svg>

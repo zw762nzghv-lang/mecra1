@@ -1,0 +1,14 @@
+# ==========================================================================
+# mecra-proxy — CORS aşan basit fetch proxy'si (Cloudflare Workers)
+# ==========================================================================
+name = "mecra-proxy"
+main = "src/index.js"
+compatibility_date = "2025-07-01"
+
+# Worker'ı workers.dev alt alan adında yayınla (kendi subdomain'in oluşur).
+workers_dev = true
+
+# KV senkron deposu (namespace önceden oluşturuldu).
+[[kv_namespaces]]
+binding = "MECRA_KV"
+id = "93371a6620504682a621504f98c86e2d"

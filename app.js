@@ -356,10 +356,16 @@ async function resolveYouTube(input) {
   // 1) Doğrudan channel_id yakala
   const chMatch = url.match(/\/channel\/(UC[\w-]{20,})/i);
   if (chMatch) {
-    return ytFeed(chMatch[1]);
+    // Avatar için kanal sayfasını bir kez çek. İkon isteğe bağlı: bu adım
+    // patlarsa (ağ/proxy) kanal yine de eklenir, ikon boş kalır.
+    let avatar = '';
+    try {
+      avatar = extractYouTubeAvatar(await fetchViaProxy(url));
+    } catch (_) { /* ikon yok say */ }
+    return { ...ytFeed(chMatch[1]), avatar };
   }
 
-  // 2) @handle / c / user → kanal sayfasını çekip channelId ayıkla
+  // 2) @handle / c / user → kanal sayfasını çekip channelId + avatar ayıkla
   const html = await fetchViaProxy(url);
   // Sayfa kaynağında "channelId":"UC..." ya da externalId geçer
   const idMatch =
@@ -367,7 +373,7 @@ async function resolveYouTube(input) {
     html.match(/"externalId":"(UC[\w-]{20,})"/) ||
     html.match(/channel_id=(UC[\w-]{20,})/) ||
     html.match(/\/channel\/(UC[\w-]{20,})/);
-  if (idMatch) return ytFeed(idMatch[1]);
+  if (idMatch) return { ...ytFeed(idMatch[1]), avatar: extractYouTubeAvatar(html) };
 
   throw new Error('YouTube kanal kimliği bulunamadı');
 }
@@ -376,6 +382,21 @@ function ytFeed(channelId) {
     type: 'youtube',
     url: 'https://www.youtube.com/feeds/videos.xml?channel_id=' + channelId,
   };
+}
+
+// Kanal sayfası HTML'inden avatar (profil) görselini ayıkla.
+// Önce og:image meta (büyük boy, yt3.googleusercontent.com/...), yoksa gömülü
+// JSON'daki avatar thumbnail'i. Bulunamazsa boş → harf/▶ rozetine düşülür.
+function extractYouTubeAvatar(html) {
+  if (!html) return '';
+  // og:image içeriği kanal avatarıdır; meta özellik/içerik sırası ikisi de olabilir.
+  let m = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i) ||
+          html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i);
+  if (m && /^https?:\/\//i.test(m[1])) return m[1].replace(/&amp;/g, '&');
+  // Yedek: gömülü JSON'daki avatar thumbnail listesi (kaçışlı /'leri düzelt).
+  m = html.match(/"avatar":\{"thumbnails":\[\{"url":"([^"]+)"/);
+  if (m && /^https?:\/\//i.test(m[1])) return m[1].replace(/\\\//g, '/');
+  return '';
 }
 
 // Site adresinden RSS keşfet: <link rel="alternate" type="application/rss+xml">
@@ -411,10 +432,10 @@ async function resolveInput(raw) {
 
   // YouTube: kanalı feed URL'sine çevir, sonra feed'i çek + ayrıştır.
   if (isYouTube(input)) {
-    const yt = await resolveYouTube(input);        // { type:'youtube', url }
+    const yt = await resolveYouTube(input);        // { type:'youtube', url, avatar }
     const parsed = await fetchAndParse(yt.url);
     if (!parsed.isFeed) throw new Error('YouTube feed okunamadı');
-    return { type: 'youtube', url: yt.url, parsed };
+    return { type: 'youtube', url: yt.url, parsed, icon: yt.avatar || '' };
   }
 
   // http(s) yoksa ekle
@@ -598,7 +619,8 @@ async function addSource(raw) {
     site: hostname(resolved.url),
     // Seçili kategori; "Kategorisiz" ise boş sakla (kategori türetildiği için).
     category: pendingCategory === UNCATEGORIZED ? '' : pendingCategory,
-    icon: '',                    // simge sonradan Ayarlar'dan eklenir
+    // YouTube'da otomatik kanal avatarı (varsa); RSS'te boş. Ayarlar'dan değiştirilir/kaldırılır.
+    icon: sanitizeIcon(resolved.icon),
   };
   state.sources.push(source);
   // Daha önce silinmiş bir url yeniden ekleniyorsa tombstone'dan çıkar
