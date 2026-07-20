@@ -60,6 +60,19 @@
     <!-- Aktif filtre adı — akışla birlikte kayan büyük başlık (iOS large-title) -->
     <h1 id="largeTitle" class="large-title">Hepsi</h1>
 
+    <!-- 'Hepsi' alt sekmeleri: uzun videolar/yazılar (İçerik) ↔ Shorts.
+         Yalnız 'Hepsi' görünümünde ve akışta YouTube varken görünür. -->
+    <div id="allTabs" class="seg" hidden>
+      <div class="seg-track" role="tablist" aria-label="Hepsi türleri">
+        <button type="button" class="seg-btn active" id="segContent" role="tab" aria-selected="true">
+          <span class="seg-lbl">İçerik</span><span class="seg-count" id="segContentCount"></span>
+        </button>
+        <button type="button" class="seg-btn" id="segShorts" role="tab" aria-selected="false">
+          <span class="seg-lbl">Shorts</span><span class="seg-count" id="segShortsCount"></span>
+        </button>
+      </div>
+    </div>
+
     <!-- Akış -->
     <section class="feed" id="feed" aria-live="polite"></section>
 
@@ -79,6 +92,19 @@
       <span class="tab-ico">✓</span><span class="tab-lbl">Okundu</span>
     </button>
   </nav>
+
+  <!-- ============ GERİ AL BALONU (yanlışlıkla okundu yapılanı geri getir) ============ -->
+  <div id="undoToast" class="undo-toast" role="status" aria-live="polite" hidden>
+    <span class="undo-msg" id="undoMsg">Okundu işaretlendi</span>
+    <button type="button" class="undo-btn" id="undoBtn">Geri al</button>
+  </div>
+
+  <!-- ============ SEÇİM ÇUBUĞU (bir karta basılı tut → çoklu seç → okundu yap) ============ -->
+  <div id="selectBar" class="select-bar" role="toolbar" aria-label="Seçim" hidden>
+    <button type="button" class="select-cancel" id="btnSelCancel">Vazgeç</button>
+    <span class="select-count" id="selCount" aria-live="polite">0 seçili</span>
+    <button type="button" class="select-done" id="btnSelMarkRead">Okundu yap</button>
+  </div>
 
   <!-- ============ AYARLAR (tam ekran, sağdan kayan görünüm) ============ -->
   <div id="settings" class="settings-view" hidden aria-label="Ayarlar">
@@ -110,6 +136,16 @@
           <span class="cat-chooser-chev" aria-hidden="true">⌄</span>
         </button>
         <p id="addHint" class="add-hint" role="status" aria-live="polite"></p>
+      </section>
+
+      <!-- «Hepsi» satırı için özel simge (kaynak simgeleriyle aynı menü: URL / cihazdan yükle / kaldır) -->
+      <section class="settings-section">
+        <h2 class="settings-label">«Hepsi» simgesi</h2>
+        <button type="button" class="settings-row all-icon-row" id="allIconBtn" aria-label="«Hepsi» simgesini değiştir">
+          <span class="settings-icon" id="allIconBadge" aria-hidden="true"></span>
+          <span class="settings-name">Hepsi sekmesi</span>
+          <span class="settings-menu" aria-hidden="true">›</span>
+        </button>
       </section>
 
       <!-- Kanallar sayfasını açan buton (kaynak yönetimi ayrı sayfada) -->

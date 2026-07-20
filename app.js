@@ -95,16 +95,29 @@ const state = {
   // Silinen kaynakların url'leri (tombstone): buluttaki eski kopya union'la geri gelmesin.
   deleted: new Set(Store.get('mecra.deleted', [])),
   cloudKey: Store.get('mecra.cloudKey', ''),  // bulut senkron anahtarı (varsa)
+  allIcon: sanitizeIcon(Store.get('mecra.allIcon', '')),  // 'Hepsi' satırı için özel simge (data URL/http)
   items: [],                                  // birleşik akış
   filter: 'all',                              // 'all' | {type:'category',name} | kaynak id
   expandedCategory: null,                     // sidebar akordeonunda açık tek kategori (ad) ya da null
   lastRefreshed: Store.get('mecra.lastRefreshed', 0),  // son başarılı yenilenme (ms)
   loading: false,
+
+  // --- "Hepsi" alt sekmeleri: uzun videolar/yazılar ('content') ↔ Shorts ---
+  // YouTube RSS'i bir videonun Short olup olmadığını söylemez; her videoId bir kez
+  // proxy ile kontrol edilip sonucu burada önbelleğe alınır (yerel; buluta gitmez).
+  ytKind: Store.get('mecra.ytKind', {}),        // videoId -> 'short' | 'long'
+  allTab: Store.get('mecra.allTab', 'content'), // 'content' | 'shorts' (yalnız 'Hepsi' için)
+
+  // --- Seçim modu (bir karta basılı tut → çoklu seç → okundu yap) ---
+  // YouTube'dan zaten izlenen videoları buraya girip linke gitmeden okundu yapmak için.
+  selectMode: false,          // seçim modu açık mı
+  selected: new Set(),        // seçili öğe id'leri (geçici; kalıcı DEĞİL)
 };
 
 function persist() {
   Store.set('mecra.sources', state.sources);
   Store.set('mecra.deleted', [...state.deleted]);
+  Store.set('mecra.allIcon', state.allIcon);
 
   // Okundu listesi sınırsız büyümesin: en yeni MAX_READ_IDS kaydı tut.
   // Set ekleme sırasını korur → en eskiler baştadır; fazlasını baştan at.
@@ -207,6 +220,7 @@ function snapshot() {
     sources: state.sources,
     read: [...state.read],
     deleted: [...state.deleted],
+    allIcon: state.allIcon,
   };
 }
 
@@ -229,6 +243,9 @@ function mergeCloud(cloud) {
   state.sources = [...byUrl.values()].filter((s) => !deleted.has(s.url));
   state.read = new Set([...state.read, ...cRead]);
   state.deleted = deleted;
+
+  // 'Hepsi' simgesi: yerelde yoksa buluttakini al (yerel öncelikli).
+  if (!state.allIcon && typeof c.allIcon === 'string') state.allIcon = sanitizeIcon(c.allIcon);
 
   persist();   // yerel + ekranı besleyecek; ayrıca push planlar
 }
@@ -336,6 +353,70 @@ async function fetchViaProxy(url) {
     }
   }
   throw lastErr || new Error('Tüm proxy denemeleri başarısız');
+}
+
+/* --------------------------------------------------------------------------
+   SHORTS TESPİTİ — "Hepsi" sekmelerinde (İçerik/Shorts) ayrım için
+   YouTube RSS'i Short bilgisi vermez. Bir videonun /shorts/ID adresi:
+     - gerçek Short ise sayfa /shorts/ID olarak kalır (canonical/og:url /shorts/),
+     - normal video ise /watch?v=ID'ye yönlenir (canonical /watch).
+   Bu yüzden her videoId'yi bir kez proxy'den çekip kanonik adrese bakarız;
+   sonuç state.ytKind'e (yerel önbellek) yazılır → bir daha kontrol edilmez.
+   -------------------------------------------------------------------------- */
+async function probeShort(videoId) {
+  const html = await fetchViaProxy('https://www.youtube.com/shorts/' + videoId);
+  // Kanonik/og:url ya da gömülü meta içinde /shorts/ geçiyorsa Short'tur.
+  return (
+    /<link[^>]+rel=["']canonical["'][^>]+href=["'][^"']*\/shorts\//i.test(html) ||
+    /<meta[^>]+property=["']og:url["'][^>]+content=["'][^"']*\/shorts\//i.test(html) ||
+    /"canonicalBaseUrl":"\/shorts\//.test(html)
+  );
+}
+
+// Akıştaki bilinmeyen YouTube videolarını (sınırlı eşzamanlılıkla) sınıflandır,
+// sonucu önbelleğe al ve gerekiyorsa 'Hepsi' akışını yeniden çiz.
+let _probing = false;
+async function ensureShortKinds() {
+  if (_probing) return;
+  const seen = new Set();
+  const unknown = [];
+  for (const it of state.items) {
+    if (it.sourceType === 'youtube' && it.videoId &&
+        !(it.videoId in state.ytKind) && !seen.has(it.videoId)) {
+      seen.add(it.videoId);
+      unknown.push(it.videoId);
+    }
+  }
+  if (!unknown.length) return;
+
+  _probing = true;
+  let i = 0;
+  let changed = false;
+  const CONCURRENCY = 4;
+
+  const worker = async () => {
+    while (i < unknown.length) {
+      const id = unknown[i++];
+      try {
+        state.ytKind[id] = (await probeShort(id)) ? 'short' : 'long';
+      } catch (_) {
+        state.ytKind[id] = 'long';   // tespit edilemedi → İçerik tarafında kalsın
+      }
+      changed = true;
+    }
+  };
+
+  try {
+    await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+  } finally {
+    _probing = false;
+  }
+
+  if (changed) {
+    Store.set('mecra.ytKind', state.ytKind);
+    // Yeni öğrenilen Short'lar doğru sekmeye geçsin (yalnız 'Hepsi' görünümünde).
+    if (state.filter === 'all') { renderAllTabs(); renderFeed(); }
+  }
 }
 
 /* --------------------------------------------------------------------------
@@ -532,8 +613,19 @@ function makeItem({ title, link, summary, dateStr, el, sourceUrl }) {
     link: link || '',
     summary: htmlToText(summary),
     date: date && !isNaN(date) ? date : null,
+    videoId: extractVideoId(el, link),
     thumb: extractThumb(el, link),
   };
+}
+
+// YouTube videoId'sini öğeden çıkar (yt:videoId, watch?v=, youtu.be/, /shorts/).
+// Short/uzun ayrımı bu id üzerinden yapılır; YouTube dışı öğelerde boş döner.
+function extractVideoId(el, link) {
+  return (el && tagText(el, 'videoId')) ||
+    (link && (link.match(/[?&]v=([\w-]{11})/) || [])[1]) ||
+    (link && (link.match(/youtu\.be\/([\w-]{11})/) || [])[1]) ||
+    (link && (link.match(/\/shorts\/([\w-]{11})/) || [])[1]) ||
+    '';
 }
 
 // Küçük görsel çıkar: YouTube videoId → hqdefault, yoksa media:thumbnail/enclosure.
@@ -541,10 +633,7 @@ function extractThumb(el, link) {
   if (!el) return '';
 
   // 1) YouTube: yt:videoId
-  const ytId =
-    tagText(el, 'videoId') ||
-    (link && (link.match(/[?&]v=([\w-]{11})/) || [])[1]) ||
-    (link && (link.match(/youtu\.be\/([\w-]{11})/) || [])[1]);
+  const ytId = extractVideoId(el, link);
   if (ytId) return `https://i.ytimg.com/vi/${ytId}/hqdefault.jpg`;
 
   // 2) media:thumbnail / media:content (url attribute)
@@ -716,6 +805,7 @@ function ensureValidFilter() {
    -------------------------------------------------------------------------- */
 async function refresh() {
   if (state.loading) return;
+  hideUndoToast();               // yenilemeyle bağlam değişiyor → geri-al balonunu kapat
   state.loading = true;
   renderState();
 
@@ -751,6 +841,9 @@ async function refresh() {
   Store.set('mecra.lastRefreshed', state.lastRefreshed);
 
   rebuildFeed();
+
+  // Yeni videoların Short/uzun türünü arka planda öğren (akışı bloklamaz).
+  ensureShortKinds();
 }
 
 // Ağ çekmeden mevcut öğelerden akışı yeniden çiz (filtre/silme sonrası).
@@ -771,9 +864,51 @@ function markRead(id) {
   }
 }
 function markAllRead() {
-  visibleItems().forEach((it) => state.read.add(it.id));
+  // Yalnız gerçekten okunmamış olanları işaretle → geri al bunları geri getirsin.
+  const newly = visibleItems().filter((it) => !state.read.has(it.id)).map((it) => it.id);
+  newly.forEach((id) => state.read.add(id));
   persist();
   rebuildFeed();
+  showUndoToast(newly);
+}
+
+/* --------------------------------------------------------------------------
+   GERİ AL BALONU (undo) — yanlışlıkla okundu yapılanı kısa süre geri getirme
+   Tek dokunuş, seçimle toplu ve "Tümünü okundu" yolları için ortak.
+   Batch: en son okundu yapılan id'ler; süre dolunca ya da Geri al'dan sonra düşer.
+   -------------------------------------------------------------------------- */
+const UNDO_MS = 5000;    // balonun ekranda kalma süresi
+let _undoBatch = null;   // en son okundu yapılan id listesi (geri alınabilir)
+let _undoTimer = null;
+
+function showUndoToast(ids) {
+  const list = (ids || []).filter(Boolean);
+  if (!list.length) return;
+  _undoBatch = list;
+  const msg = $('#undoMsg');
+  if (msg) msg.textContent = list.length === 1 ? 'Okundu işaretlendi' : `${list.length} öğe okundu`;
+  const el = $('#undoToast');
+  if (!el) return;
+  el.hidden = false;
+  clearTimeout(_undoTimer);
+  _undoTimer = setTimeout(hideUndoToast, UNDO_MS);
+}
+
+function hideUndoToast() {
+  clearTimeout(_undoTimer);
+  _undoTimer = null;
+  _undoBatch = null;                 // pencere kapandı → artık geri alınamaz
+  const el = $('#undoToast');
+  if (el) el.hidden = true;
+}
+
+function undoLastRead() {
+  const ids = _undoBatch;
+  if (!ids || !ids.length) { hideUndoToast(); return; }
+  ids.forEach((id) => state.read.delete(id));   // okundu işaretini kaldır → öğeler geri gelir
+  persist();
+  hideUndoToast();
+  rebuildFeed();                     // sidebar sayaçları + akış tazelensin
 }
 function unreadCount(sourceId) {
   return state.items.filter(
@@ -782,12 +917,113 @@ function unreadCount(sourceId) {
 }
 
 /* --------------------------------------------------------------------------
+   SEÇİM MODU — bir karta basılı tut → çoklu seç → seçilenleri okundu yap
+   Amaç: YouTube'da (ya da başka yerde) zaten izlediğin videoların kartlarını
+   linke gidip dönmeden toplu "okundu" yapmak.
+   Seçim geçici bir arayüz durumudur: akış her yeniden çizildiğinde sıfırlanır.
+   -------------------------------------------------------------------------- */
+
+// Bir kartı akıştan yumuşakça çıkar (daralt + solar). Tek tık ve toplu okundu ortak kullanır.
+function dissolveCard(a) {
+  a.style.maxHeight = a.offsetHeight + 'px';
+  void a.offsetHeight;                 // reflow → daralma animasyonu tetiklensin
+  a.classList.add('leaving');
+  setTimeout(() => { a.remove(); renderState(); }, 340);
+}
+
+// Seçim durumunu tamamen sıfırla (mod kapalı, seçim boş, çubuk gizli).
+function resetSelection() {
+  state.selectMode = false;
+  state.selected.clear();
+  document.body.classList.remove('selecting');
+  const bar = $('#selectBar');
+  if (bar) bar.hidden = true;
+}
+
+// Seçim modundan çık: ekrandaki vurguları da temizle (akış YIKILMADAN — Vazgeç/ESC yolu).
+function exitSelectMode() {
+  const feed = $('#feed');
+  if (feed) feed.querySelectorAll('.card.selected').forEach((c) => c.classList.remove('selected'));
+  resetSelection();
+}
+
+// Seçim moduna gir ve tetikleyen kartı seç.
+function enterSelectMode(id, cardEl) {
+  hideUndoToast();               // seçim başlarken varsa eski geri-al balonunu kaldır
+  state.selectMode = true;
+  document.body.classList.add('selecting');
+  state.selected.clear();
+  state.selected.add(id);
+  cardEl.classList.add('selected');
+  $('#selectBar').hidden = false;
+  updateSelectBar();
+}
+
+// Bir kartın seçimini aç/kapat (seçim modunda tıklama).
+function toggleSelect(id, cardEl) {
+  if (state.selected.has(id)) {
+    state.selected.delete(id);
+    cardEl.classList.remove('selected');
+  } else {
+    state.selected.add(id);
+    cardEl.classList.add('selected');
+  }
+  updateSelectBar();
+}
+
+// Seçim çubuğundaki sayaç + "Okundu yap" butonunun etkinliğini güncelle.
+function updateSelectBar() {
+  const n = state.selected.size;
+  const cnt = $('#selCount');
+  if (cnt) cnt.textContent = n + ' seçili';
+  const btn = $('#btnSelMarkRead');
+  if (btn) btn.disabled = n === 0;
+}
+
+// Seçilenleri okundu işaretle, kartlarını akıştan çıkar, seçim modunu kapat.
+function markSelectedRead() {
+  const ids = [...state.selected];
+  if (!ids.length) return;
+  ids.forEach((id) => state.read.add(id));
+  persist();
+  // Seçili kartları yumuşakça çıkar (vurgu halkasını önce kaldır ki temiz görünsün).
+  $('#feed').querySelectorAll('.card.selected').forEach((c) => {
+    c.classList.remove('selected');
+    dissolveCard(c);
+  });
+  resetSelection();
+  refreshSidebarState();   // okunmamış sayaçları güncelle (listeyi yıkma)
+  showUndoToast(ids);
+}
+
+/* --------------------------------------------------------------------------
    RENDER
    -------------------------------------------------------------------------- */
+// Bir öğe Short mü? Yalnız türü bilinen ('short' olarak işaretlenmiş) YouTube
+// videoları Short sayılır; yazılar ve türü henüz bilinmeyen videolar 'content' tarafında.
+function ytKindOf(it) {
+  if (!it || it.sourceType !== 'youtube' || !it.videoId) return 'content';
+  return state.ytKind[it.videoId] === 'short' ? 'short' : 'content';
+}
+
+// Akışta hiç YouTube öğesi var mı? (Yoksa Short/İçerik sekmesi anlamsız → gizlenir.)
+function hasYouTubeItems() {
+  return state.items.some((it) => it.sourceType === 'youtube');
+}
+
+// "Hepsi" alt sekmeleri (İçerik/Shorts) etkin mi? Yalnız 'Hepsi' görünümünde ve
+// akışta YouTube öğesi varken. Değilse ayrım yapılmaz (her şey tek akışta).
+function allTabsActive() {
+  return state.filter === 'all' && hasYouTubeItems();
+}
+
 function visibleItems() {
   // Seçili filtre: Hepsi / kategori / tek kaynak
   if (state.filter === 'all') {
-    return state.items;
+    if (!allTabsActive()) return state.items;
+    // 'Hepsi' → aktif alt sekmeye göre böl (Shorts ↔ İçerik).
+    const wantShort = state.allTab === 'shorts';
+    return state.items.filter((it) => (ytKindOf(it) === 'short') === wantShort);
   }
   if (state.filter && state.filter.type === 'category') {
     // Kategorinin tüm kaynakları birleşik (sıra korunur)
@@ -822,13 +1058,14 @@ function renderSources() {
   if (!nav) return;
   nav.textContent = '';              // güvenli temizlik
 
-  // "Hepsi" satırı (grupsuz, en üstte)
+  // "Hepsi" satırı (grupsuz, en üstte) — Ayarlar'dan yüklenmiş özel simge varsa onu göster.
   nav.appendChild(sourceRow({
     id: 'all',
     title: 'Hepsi',
     kind: 'all',
     count: unreadCount('all'),
     active: state.filter === 'all',
+    source: state.allIcon ? { icon: state.allIcon } : undefined,
   }));
 
   // Kategoriye göre gruplar (her biri akordeon)
@@ -913,6 +1150,9 @@ function refreshSidebarState() {
   const title = currentFilterTitle();
   $('#toolbarTitle').textContent = title;
   $('#largeTitle').textContent = title;
+
+  // 'Hepsi' alt sekme sayaçları (okundu değişince güncellensin)
+  renderAllTabs();
 }
 
 // Kategori grup başlığı — tek tıkla hem akordeonu aç/kapat hem akışı filtrele.
@@ -1026,9 +1266,30 @@ function sourceRow({ id, title, kind, count, active, source, nested }) {
    AYARLAR — tam ekran yönetim sayfası (ekleme + kaynak yönetimi + yedek + senkron)
    -------------------------------------------------------------------------- */
 
+// 'Hepsi' satırının sanal simge hedefi: kaynak simge menüsünü (URL / cihazdan yükle /
+// kaldır) aynen kullanabilmek için source-benzeri bir nesne. .icon → state.allIcon.
+function allIconTarget() {
+  return {
+    type: 'all',
+    title: 'Hepsi',
+    get icon() { return state.allIcon; },
+    set icon(v) { state.allIcon = v || ''; },
+  };
+}
+
+// Ayarlar'daki '«Hepsi» simgesi' önizleme rozetini güncelle (simge yoksa nokta).
+function updateAllIconPreview() {
+  const badge = $('#allIconBadge');
+  if (!badge) return;
+  badge.textContent = '';
+  const src = state.allIcon ? { icon: state.allIcon } : undefined;
+  badge.appendChild(sourceBadgeEl(src, 'all', 'Hepsi'));
+}
+
 // Ayarlar'daki kaynak yönetim listesi: kategoriye göre gruplu düz liste (akordeon YOK).
 function renderSettings() {
   updateChannelsCount();            // "Kanallar" butonundaki sayı her zaman güncel kalsın
+  updateAllIconPreview();           // «Hepsi» simgesi önizlemesi güncel kalsın
   const list = $('#settingsList');
   if (!list) return;
   list.textContent = '';
@@ -1365,7 +1626,45 @@ function resizeImageToDataUrl(file) {
   });
 }
 
+// "Hepsi" alt sekmeleri (İçerik/Shorts): görünürlük + aktiflik + okunmamış sayaçları.
+function renderAllTabs() {
+  const el = $('#allTabs');
+  if (!el) return;
+  if (!allTabsActive()) { el.hidden = true; return; }
+  el.hidden = false;
+  const onShorts = state.allTab === 'shorts';
+  const cBtn = $('#segContent');
+  const sBtn = $('#segShorts');
+  cBtn.classList.toggle('active', !onShorts);
+  sBtn.classList.toggle('active', onShorts);
+  cBtn.setAttribute('aria-selected', String(!onShorts));
+  sBtn.setAttribute('aria-selected', String(onShorts));
+  setSegCount('#segContentCount', tabUnread(false));
+  setSegCount('#segShortsCount', tabUnread(true));
+}
+function setSegCount(sel, n) {
+  const el = $(sel);
+  if (el) el.textContent = n > 0 ? (n > 99 ? '99+' : String(n)) : '';
+}
+// Bir alt sekmedeki okunmamış öğe sayısı (wantShort=true → Shorts, false → İçerik).
+function tabUnread(wantShort) {
+  return state.items.filter(
+    (it) => !state.read.has(it.id) && (ytKindOf(it) === 'short') === wantShort
+  ).length;
+}
+// Alt sekmeyi değiştir (İçerik ↔ Shorts).
+function setAllTab(tab) {
+  if (state.allTab === tab) return;
+  state.allTab = tab;
+  Store.set('mecra.allTab', tab);
+  renderAllTabs();
+  renderFeed();
+}
+
 function renderFeed() {
+  // Akış baştan kuruluyor → eski kart referansları gidiyor; varsa seçim modunu kapat.
+  if (state.selectMode) resetSelection();
+  renderAllTabs();                 // 'Hepsi' sekmeleri görünür/güncel kalsın
   const feed = $('#feed');
   feed.textContent = '';
   // Okunan öğeler akışta yer kaplamasın (görüldükten sonra kaybolsunlar).
@@ -1455,34 +1754,107 @@ function card(it) {
   body.appendChild(meta);
   a.appendChild(body);
 
-  // Tıklayınca okundu işaretle (link yeni sekmede açılır) ve kartı akıştan çıkar.
-  a.addEventListener('click', () => {
+  // Seçim modu onay rozeti (sağ üstte; yalnız .card.selected iken görünür).
+  const check = document.createElement('span');
+  check.className = 'card-check';
+  check.setAttribute('aria-hidden', 'true');
+  check.textContent = '✓';
+  a.appendChild(check);
+
+  // Nadir de olsa yeniden çizim sırasında seçili kalmışsa vurguyu koru.
+  if (state.selected.has(it.id)) a.classList.add('selected');
+
+  // --- Basılı tut (long-press) algılama: seçim moduna gir / seçime ekle ---
+  const LP_MS = 420;     // basılı tutma eşiği (ms)
+  const LP_MOVE = 12;    // bu kadar px kayarsa "kaydırma"dır, iptal et
+  let lpTimer = null;
+  let lpFired = false;   // basılı tutma bu dokunuşta seçim yaptı mı → click linki açmasın
+  let lpX = 0, lpY = 0;
+  const clearLp = () => { if (lpTimer) { clearTimeout(lpTimer); lpTimer = null; } };
+
+  a.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;   // yalnız sol tık/dokunuş
+    lpFired = false;
+    lpX = e.clientX; lpY = e.clientY;
+    clearLp();
+    lpTimer = setTimeout(() => {
+      lpTimer = null;
+      lpFired = true;
+      if (!state.selectMode) enterSelectMode(it.id, a);
+      else toggleSelect(it.id, a);
+    }, LP_MS);
+  });
+  a.addEventListener('pointermove', (e) => {
+    if (!lpTimer) return;
+    if (Math.abs(e.clientX - lpX) > LP_MOVE || Math.abs(e.clientY - lpY) > LP_MOVE) clearLp();
+  });
+  a.addEventListener('pointerup', clearLp);
+  a.addEventListener('pointercancel', clearLp);
+  // Basılı tutunca çıkan tarayıcı/iOS link menüsünü bastır (seçim için basılı tutuyoruz).
+  a.addEventListener('contextmenu', (e) => {
+    if (state.selectMode || lpFired) e.preventDefault();
+  });
+
+  a.addEventListener('click', (e) => {
+    // Basılı tutma seçim yaptıysa bu tıklama linke gitmesin.
+    if (lpFired) { e.preventDefault(); lpFired = false; return; }
+    // Seçim modunda tıklama = seç/bırak (linke gitme).
+    if (state.selectMode) { e.preventDefault(); toggleSelect(it.id, a); return; }
+    // Normal: okundu işaretle (link yeni sekmede açılır) + kartı akıştan çıkar.
     markRead(it.id);
-    // Yumuşak kayboluş: önce mevcut yüksekliği sabitle, sonra 0'a daralt.
-    a.style.maxHeight = a.offsetHeight + 'px';
-    void a.offsetHeight;               // reflow → daralma animasyonu tetiklensin
-    a.classList.add('leaving');
-    setTimeout(() => { a.remove(); renderState(); }, 340);
+    dissolveCard(a);
+    showUndoToast([it.id]);
   });
 
   return a;
 }
 
 // Boş / yükleniyor durum kutusu.
+// --- Yükleme iskeleti (skeleton) --------------------------------------------
+// Statik, kullanıcı verisi içermez → createElement ile kurulur (innerHTML yok).
+function skelBlock(cls) {
+  const d = document.createElement('div');
+  d.className = 'skel ' + cls;
+  return d;
+}
+
+function skeletonCard(kind) {
+  const c = document.createElement('div');
+  c.className = 'card ' + kind + ' card--skeleton';
+  c.setAttribute('aria-hidden', 'true');
+
+  // Görsel: videoda üstte büyük 16:9, yazıda solda küçük 16:9.
+  c.appendChild(skelBlock(kind === 'video' ? 'skel-thumb-lg' : 'skel-thumb'));
+
+  const body = document.createElement('div');
+  body.className = 'card-body';
+  body.appendChild(skelBlock('skel-line'));       // başlık satırı 1
+  body.appendChild(skelBlock('skel-line mid'));   // başlık satırı 2
+  if (kind === 'article') body.appendChild(skelBlock('skel-line short')); // özet
+  body.appendChild(skelBlock('skel-meta'));       // kaynak · zaman
+  c.appendChild(body);
+  return c;
+}
+
+// Kaynak türlerine göre doğal bir karışım üret (video varsa aralara serpiştir).
+function renderSkeletons(feed) {
+  feed.textContent = '';
+  const hasVideo = state.sources.some((s) => s.type === 'youtube');
+  const pattern = hasVideo
+    ? ['video', 'article', 'article', 'video', 'article']
+    : ['article', 'article', 'article', 'article', 'article'];
+  for (const kind of pattern) feed.appendChild(skeletonCard(kind));
+}
+
 function renderState() {
   const box = $('#stateBox');
   const feed = $('#feed');
 
   if (state.loading && state.items.length === 0) {
-    feed.hidden = true;
-    box.hidden = false;
-    box.textContent = '';
-    const sp = document.createElement('div');
-    sp.className = 'spinner';
-    box.appendChild(sp);
-    const p = document.createElement('p');
-    p.textContent = 'Akış getiriliyor…';
-    box.appendChild(p);
+    // İlk/soğuk yükleme: spinner yerine kart düzeninde parıldayan iskeletler.
+    box.hidden = true;
+    feed.hidden = false;
+    renderSkeletons(feed);
     return;
   }
 
@@ -1725,6 +2097,10 @@ function bind() {
   $('#btnRefresh').addEventListener('click', refresh);
   $('#tabRefresh').addEventListener('click', refresh);
 
+  // "Hepsi" alt sekmeleri: İçerik ↔ Shorts
+  $('#segContent').addEventListener('click', () => setAllTab('content'));
+  $('#segShorts').addEventListener('click', () => setAllTab('shorts'));
+
   // Çekmece aç/kapa
   $('#btnOpenSidebar').addEventListener('click', openSidebar);
   $('#tabSources').addEventListener('click', openSidebar);
@@ -1738,6 +2114,9 @@ function bind() {
   // Kanallar (tam ekran) aç/kapa — Ayarlar üstünde açılır
   $('#btnOpenChannels').addEventListener('click', openChannels);
   $('#btnCloseChannels').addEventListener('click', closeChannels);
+
+  // «Hepsi» simgesi: satıra dokununca kaynaklardaki simge menüsünü aç (sanal hedef).
+  $('#allIconBtn').addEventListener('click', () => openIconMenu(allIconTarget()));
 
   // Simge: "Cihazdan yükle" dosya seçici geri dönüşü → küçült + uygula
   $('#iconFile').addEventListener('change', (e) => {
@@ -1761,9 +2140,18 @@ function bind() {
   // Tümünü okundu say
   $('#tabMarkAll').addEventListener('click', markAllRead);
 
+  // Seçim çubuğu: Vazgeç (moddan çık) / Okundu yap (seçilenleri işaretle)
+  $('#btnSelCancel').addEventListener('click', exitSelectMode);
+  $('#btnSelMarkRead').addEventListener('click', markSelectedRead);
+
+  // "Geri al" balonu: son okundu işaretini geri getir
+  $('#undoBtn').addEventListener('click', undoLastRead);
+
   // ESC ile açık katmanı kapat (en üstteki katman öncelikli)
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
+    // Seçim modu açıksa önce ondan çık.
+    if (state.selectMode) { exitSelectMode(); return; }
     // Dinamik simge menüsü açıksa onu kendi ESC dinleyicisi kapatır — burada dokunma.
     if (document.querySelector('.sheet-wrap.icon-menu.open')) return;
     if (!$('#sheet').hidden) closeSheet(null);

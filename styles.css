@@ -612,6 +612,8 @@ button {
   transition: background 0.15s ease;
 }
 .settings-icon:active { background: color-mix(in srgb, var(--text) 8%, transparent); }
+/* «Hepsi» simge satırı bir <button> → tam genişlik + sola hizalı (kaynak satırlarıyla aynı görünüm). */
+.all-icon-row { width: 100%; text-align: left; }
 .settings-icon .source-icon,
 .settings-icon .source-dot { width: 32px; height: 32px; flex-basis: 32px; }
 .settings-name {
@@ -685,6 +687,54 @@ button {
   line-height: 1.15;
 }
 
+/* ============ 'Hepsi' alt sekmeleri (İçerik / Shorts) — iOS segmented control ============ */
+.seg {
+  max-width: 720px;
+  margin: 6px auto 2px;
+  padding: 2px max(16px, var(--sa-left)) 2px max(16px, var(--sa-right));
+}
+.seg-track {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+.seg-btn {
+  flex: 1;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 9px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-dim);
+  transition: background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease, transform 0.15s var(--spring);
+}
+.seg-btn:active { transform: scale(0.97); }
+.seg-btn.active {
+  color: var(--text);
+  background: var(--bg-elevated);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
+}
+/* Okunmamış sayısı — küçük yuvarlak rozet (0 iken boş → gizli) */
+.seg-count {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--accent);
+}
+.seg-count:empty { display: none; }
+
 /* ===================== Akış ===================== */
 .feed {
   max-width: 720px;
@@ -696,6 +746,7 @@ button {
 }
 
 .card {
+  position: relative;   /* seçim onay rozeti (.card-check) için konumlama zemini */
   display: flex;
   gap: 14px;
   padding: 14px;
@@ -705,9 +756,43 @@ button {
   text-decoration: none;
   color: inherit;
   transition: transform 0.22s var(--spring), opacity 0.3s ease, box-shadow 0.22s ease;
+  /* iOS/iPad: uzun basınca çıkan native "paylaş / linki kopyala" callout menüsünü
+     kapat. Uzun-basma bizde seçim jesti; contextmenu iOS'ta tetiklenmediği için
+     JS preventDefault yetmez, callout'u CSS ile bastırmak gerekir. */
+  -webkit-touch-callout: none;
 }
+/* Kart içeriği (görsel dahil) de basılı tutulunca menü açmasın. */
+.card, .card * { -webkit-touch-callout: none; }
 .card:active { transform: scale(0.985); box-shadow: var(--shadow); }
 .card.read { opacity: 0.5; }   /* okununca sönükleşir */
+
+/* Seçim modu: seçili kart accent halkasıyla vurgulanır + sağ üstte onay rozeti. */
+.card.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent) inset;
+}
+.card-check {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  font-size: 15px;
+  color: #fff;
+  background: var(--accent);
+  border: 2px solid var(--bg-elevated);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+  opacity: 0;
+  transform: scale(0.4);
+  transition: opacity 0.18s ease, transform 0.18s var(--spring);
+  pointer-events: none;
+}
+.card.selected .card-check { opacity: 1; transform: scale(1); }
+/* Seçim modunda karta basınca link menüsü/metin seçimi çıkmasın. */
+body.selecting .card { -webkit-user-select: none; user-select: none; }
 
 /* Okunan kart akıştan yumuşakça çıkar: daralır + solar (yer kaplamaz). */
 .card.leaving {
@@ -811,6 +896,47 @@ button {
   flex: 0 0 9px;
 }
 
+/* ===================== Yükleme iskeleti (skeleton) =====================
+   Yenilerken spinner yerine gerçek kart düzenine benzeyen, üzerinden ışık
+   geçen (shimmer) iskeletler. İçerik "geliyor" hissi verir; native durur.
+   .card temel görünümünü (zemin/kenar/radius/padding) miras alır. */
+.card--skeleton { pointer-events: none; cursor: default; }
+.card--skeleton:active { transform: none; box-shadow: none; }
+
+.skel {
+  position: relative;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  border-radius: 7px;
+}
+.skel::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--text) 7%, transparent),
+    transparent
+  );
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+@keyframes shimmer { to { transform: translateX(100%); } }
+
+/* Gerçek görsellerle aynı ölçüler → içerik gelince zıplama olmaz. */
+.skel-thumb-lg { width: 100%; aspect-ratio: 16 / 9; border-radius: var(--radius-sm); }
+.skel-thumb    { flex: 0 0 116px; width: 116px; aspect-ratio: 16 / 9; border-radius: var(--radius-sm); }
+.skel-line     { height: 13px; width: 100%; }
+.skel-line.mid   { width: 70%; }
+.skel-line.short { width: 45%; }
+.skel-meta     { height: 11px; width: 40%; margin-top: 4px; }
+
+/* Hareket azaltma tercihi: parıltıyı durdur, sabit blok kalsın. */
+@media (prefers-reduced-motion: reduce) {
+  .skel::after { animation: none; }
+}
+
 /* ===================== Durum kutusu ===================== */
 .state {
   max-width: 520px;
@@ -867,6 +993,94 @@ button {
 .tab-btn:active { transform: scale(0.9); }
 .tab-ico { font-size: 20px; line-height: 1; }
 .tab-lbl { font-size: 11px; font-weight: 600; }
+
+/* ===================== Seçim çubuğu (basılı tut → çoklu seç) ===================== */
+/* Seçim modu açıkken normal alt sekme çubuğunu gizle; yerini seçim çubuğu alır. */
+body.selecting .tabbar { display: none; }
+
+.select-bar {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(var(--sa-bottom) + 14px);
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  width: min(520px, calc(100vw - 28px));
+  box-sizing: border-box;
+  background: var(--glass-strong);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  backdrop-filter: blur(28px) saturate(180%);
+  border: 1px solid var(--glass-edge);
+  border-radius: 28px;
+  box-shadow: var(--shadow);
+  animation: rise 0.3s var(--spring) both;
+}
+.select-count {
+  flex: 1;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+.select-cancel,
+.select-done {
+  min-height: 44px;
+  padding: 0 16px;
+  border-radius: 20px;
+  font-size: 15px;
+  font-weight: 600;
+  transition: transform 0.2s var(--spring), background 0.2s ease, opacity 0.2s ease;
+}
+.select-cancel { color: var(--text-dim); }
+.select-cancel:active { transform: scale(0.94); }
+.select-done { color: #fff; background: var(--accent); }
+.select-done:active { transform: scale(0.94); background: var(--accent-press); }
+.select-done:disabled { opacity: 0.4; background: var(--text-faint); }
+
+/* ===================== "Geri al" balonu (undo snackbar) ===================== */
+/* Okundu yapılan öğeleri kısa süre geri getirme fırsatı. Alt sekme çubuğunun
+   ÜSTÜNDE yüzer (mobil); masaüstünde tabbar yok → aşağıya iner. */
+.undo-toast {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(var(--sa-bottom) + 92px);
+  z-index: 45;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 10px 10px 18px;
+  max-width: calc(100vw - 28px);
+  box-sizing: border-box;
+  background: var(--glass-strong);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  backdrop-filter: blur(28px) saturate(180%);
+  border: 1px solid var(--glass-edge);
+  border-radius: 26px;
+  box-shadow: var(--shadow);
+  animation: rise 0.3s var(--spring) both;
+}
+.undo-msg {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+}
+.undo-btn {
+  flex: 0 0 auto;
+  min-height: 40px;
+  padding: 0 16px;
+  border-radius: 20px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  transition: transform 0.2s var(--spring), background 0.2s ease;
+}
+.undo-btn:active { transform: scale(0.94); background: color-mix(in srgb, var(--accent) 24%, transparent); }
 
 /* Aşağı çek-yenile göstergesi — küçük cam disk + spinner */
 .ptr {
@@ -936,6 +1150,7 @@ button {
   .tabbar { display: none; }
   .btn-mobile-only { display: none; }
   #btnOpenSidebar { display: none; }         /* menü butonu gereksiz */
+  .undo-toast { bottom: calc(var(--sa-bottom) + 18px); }   /* tabbar yok → aşağıya in */
 }
 
 /* Küçük telefonlarda küçük görsel + kompakt sekmeler */
