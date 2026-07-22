@@ -5,7 +5,7 @@
    ========================================================================== */
 
 // Kabuk dosyaları her değiştiğinde bu sürümü artır → eski önbellek atılır, taze sunulur.
-const CACHE = 'mecra-shell-v21';
+const CACHE = 'mecra-shell-v22';
 
 // Uygulama kabuğu — çevrimdışı açılış için gereken statik dosyalar.
 const SHELL = [
@@ -18,9 +18,19 @@ const SHELL = [
 ];
 
 // Kurulum: kabuğu önbelleğe al.
+// ÖNEMLİ: her dosyayı 'reload' ile çek → tarayıcının HTTP önbelleğini atla.
+// Aksi halde sürüm artsa bile addAll, bayat app.js'i HTTP önbelleğinden alıp
+// yeni sürüm önbelleğine koyabilir (güncelleme kullanıcıya ulaşmaz).
 self.addEventListener('install', (e) => {
   e.waitUntil(
-    caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())
+    caches.open(CACHE)
+      .then((c) => Promise.all(
+        SHELL.map((u) =>
+          fetch(new Request(u, { cache: 'reload' }))
+            .then((res) => { if (res.ok) return c.put(u, res); })
+        )
+      ))
+      .then(() => self.skipWaiting())
   );
 });
 
