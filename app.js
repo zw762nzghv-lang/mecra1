@@ -260,7 +260,8 @@ function normalizeSource(s) {
     id: s.id || uid(),
     title: s.title || hostname(s.url),
     url: s.url,
-    type: s.type === 'youtube' ? 'youtube' : 'rss',
+    // URL bir YouTube adresiyse tip 'youtube' olsun (eski/yanlış kayıtlar da düzelsin).
+    type: (s.type === 'youtube' || (s.url && isYouTube(s.url))) ? 'youtube' : 'rss',
     site: s.site || hostname(s.url),
     category: s.category ? String(s.category) : '',
     // Opsiyonel simge (data URL / http(s)); yoksa boş → harf rozeti kullanılır.
@@ -2193,8 +2194,24 @@ function bind() {
   });
 }
 
+// Eski/yanlış kaydedilmiş kaynakları düzelt: URL'si YouTube olduğu halde tipi
+// 'rss' kalmış kanalları 'youtube' yap. Böylece İçerik/Shorts sekmeleri açılır,
+// Shorts tespiti çalışır ve kartlar doğru (video) düzende gösterilir.
+// Değişiklik varsa kalıcılaştır (bulut senkronuna da yansır).
+function migrateSourceTypes() {
+  let changed = false;
+  state.sources.forEach((s) => {
+    if (s && s.type !== 'youtube' && s.url && isYouTube(s.url)) {
+      s.type = 'youtube';
+      changed = true;
+    }
+  });
+  if (changed) persist();
+}
+
 function init() {
   bind();
+  migrateSourceTypes();          // kaynak tiplerini düzelt (render'dan önce)
   setupPullToRefresh();
   renderSources();
   renderSettings();
