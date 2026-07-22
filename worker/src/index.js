@@ -38,6 +38,14 @@ function jsonResponse(bodyText, status = 200) {
 
 /* ----------------------------- PROXY (mevcut) ----------------------------- */
 
+// YouTube/Google, veri merkezi IP'lerine (Worker gibi) çerez onay duvarı
+// ("Before you continue…") sunar → gerçek sayfa yüklenmez, canonical/redirect
+// sinyali kaybolur. Consent çerezi göndererek duvarı aş (yt-dlp vb. de böyle yapar).
+function isGoogleHost(host) {
+  return /(^|\.)youtube\.com$|(^|\.)youtu\.be$|(^|\.)google\.com$/i.test(host);
+}
+const YT_CONSENT_COOKIE = 'SOCS=CAI; CONSENT=YES+1';
+
 // Hedef URL güvenli mi? (Basit SSRF koruması)
 function isAllowed(target) {
   let u;
@@ -82,12 +90,21 @@ async function handleProxy(searchParams) {
 
   let upstream;
   try {
+    const headers = {
+      'User-Agent': 'Mozilla/5.0 (compatible; mecra-proxy/1.0; +https://github.com/)',
+      'Accept': 'application/rss+xml, application/atom+xml, application/xml, text/xml, text/html, */*',
+    };
+    // YouTube/Google hedeflerinde: consent çerezi (onay duvarını aş) + tarayıcı
+    // User-Agent'ı (gerçek sayfa HTML'i gelsin; bot UA'sında canonical boş dönüyor).
+    if (isGoogleHost(check.url.hostname.toLowerCase())) {
+      headers['Cookie'] = YT_CONSENT_COOKIE;
+      headers['User-Agent'] =
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
+      headers['Accept-Language'] = 'en-US,en;q=0.9';
+    }
     upstream = await fetch(check.url.href, {
       method: 'GET',
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; mecra-proxy/1.0; +https://github.com/)',
-        'Accept': 'application/rss+xml, application/atom+xml, application/xml, text/xml, text/html, */*',
-      },
+      headers,
       redirect: 'follow',
     });
   } catch (e) {
@@ -103,6 +120,56 @@ async function handleProxy(searchParams) {
   if (ct) headers.set('Content-Type', ct);
   headers.set('Cache-Control', 'no-store');
   return new Response(upstream.body, { status: 200, headers });
+}
+
+/* ------------------------- YOUTUBE SHORTS TESPİTİ ------------------------- */
+// GET /ytkind?id=<videoId> → { id, kind:'short'|'long' }
+// Sinyal: youtube.com/shorts/ID normal videoda 303 ile /watch'a yönlenir,
+// gerçek Short'ta 200 kalır. Consent çereziyle veri-merkezi onay duvarı aşılır,
+// böylece bu sinyal net gelir. İstemci 1.3 MB HTML indirmez; ufak JSON alır.
+async function handleYtKind(searchParams) {
+  const id = (searchParams.get('id') || '').trim();
+  if (!/^[\w-]{11}$/.test(id)) {
+    return fail(400, 'Geçersiz video id (11 karakter olmalı)');
+  }
+
+  let res;
+  try {
+    res = await fetch('https://www.youtube.com/shorts/' + id, {
+      method: 'GET',
+      redirect: 'manual',                 // yönlendirmeyi biz değerlendirelim
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Cookie': YT_CONSENT_COOKIE,       // onay duvarını aş
+      },
+    });
+  } catch (e) {
+    return fail(502, 'YouTube\'a ulaşılamadı: ' + (e && e.message ? e.message : 'bilinmeyen'));
+  }
+
+  let kind = 'long';   // güvenli varsayılan: bilinmiyorsa İçerik tarafında kalsın
+  const status = res.status;
+  if (status >= 300 && status < 400) {
+    // /watch'a yönlendi → normal (uzun) video. Başka yere yönlenirse yine uzun say.
+    const loc = res.headers.get('location') || '';
+    kind = /\/shorts\//i.test(loc) ? 'short' : 'long';
+  } else if (status === 200) {
+    // 200: ya gerçek Short ya da (çerez tutmadıysa) onay duvarı. Gövdeden doğrula.
+    let html = '';
+    try { html = await res.text(); } catch (_) { html = ''; }
+    const wall = /consent\.youtube\.com|before you continue/i.test(html);
+    if (wall) {
+      // Çerez işe yaramadı → canonical yok; kararsız → uzun say (İçerik'te kalsın).
+      kind = 'long';
+    } else if (/rel=["']canonical["'][^>]*href=["'][^"']*\/watch/i.test(html)) {
+      kind = 'long';    // canonical /watch → uzun
+    } else {
+      kind = 'short';   // yönlenmedi + duvar yok → Short
+    }
+  }
+
+  return jsonResponse(JSON.stringify({ id, kind }));
 }
 
 /* ------------------------------- KV SENKRON ------------------------------- */
@@ -167,6 +234,12 @@ export default {
     // /kv → senkron ucu (proxy'den temiz ayrı)
     if (url.pathname === '/kv') {
       return handleKv(request, env, url.searchParams);
+    }
+
+    // /ytkind → YouTube Short/uzun tespiti (yalnız GET)
+    if (url.pathname === '/ytkind') {
+      if (request.method !== 'GET') return fail(405, 'Sadece GET destekleniyor');
+      return handleYtKind(url.searchParams);
     }
 
     // Diğer her şey → mevcut proxy davranışı (yalnız GET)

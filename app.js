@@ -41,6 +41,10 @@ const CONFIG = {
   // değişirse burayı da güncelle.
   SYNC_ENDPOINT: 'https://mecra-proxy.mecra-talha.workers.dev/kv',
 
+  // YouTube Short/uzun tespit ucu (aynı Worker'ın /ytkind yolu). Worker sunucu
+  // tarafında consent duvarını aşıp yönlendirmeye bakar → güvenilir + hafif.
+  YTKIND_ENDPOINT: 'https://mecra-proxy.mecra-talha.workers.dev/ytkind',
+
   // KV'ye yazma debounce süresi (ms). Hızlı değişiklikler tek yazıya toplanır.
   SYNC_DEBOUNCE_MS: 1500,
 };
@@ -364,8 +368,19 @@ async function fetchViaProxy(url) {
    sonuç state.ytKind'e (yerel önbellek) yazılır → bir daha kontrol edilmez.
    -------------------------------------------------------------------------- */
 async function probeShort(videoId) {
+  // 1) Birincil: kendi Worker'ımızın /ytkind ucu. Sunucu tarafında consent
+  //    duvarını aşıp /shorts/ID yönlendirmesine bakar (303 /watch → uzun, 200 → Short).
+  //    Hafif (ufak JSON) ve güvenilir; istemci 1+ MB HTML indirmez.
+  try {
+    const res = await fetch(CONFIG.YTKIND_ENDPOINT + '?id=' + encodeURIComponent(videoId));
+    if (res.ok) {
+      const data = await res.json();
+      if (data && (data.kind === 'short' || data.kind === 'long')) return data.kind === 'short';
+    }
+  } catch (_) { /* Worker ulaşılamadı → aşağıdaki yedek yönteme düş */ }
+
+  // 2) Yedek: sayfayı proxy zinciriyle çekip canonical/og:url'de /shorts/ ara.
   const html = await fetchViaProxy('https://www.youtube.com/shorts/' + videoId);
-  // Kanonik/og:url ya da gömülü meta içinde /shorts/ geçiyorsa Short'tur.
   return (
     /<link[^>]+rel=["']canonical["'][^>]+href=["'][^"']*\/shorts\//i.test(html) ||
     /<meta[^>]+property=["']og:url["'][^>]+content=["'][^"']*\/shorts\//i.test(html) ||
